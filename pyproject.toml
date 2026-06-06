@@ -1,0 +1,34 @@
+[project]
+name = "acme-tiny-dns-persistent"
+version = "0.0.1"
+requires-python = ">=3.11"
+dependencies = []
+authors = [
+    {name = "nipil", email = "nipil@users.noreply.github.com"},
+]
+maintainers = [
+    {name = "nipil", email = "nipil@users.noreply.github.com"},
+]
+description = "A tiny script to issue and renew TLS certs from Let's Encrypt using dns-persist-01 challenge"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    'Development Status :: 3 - Alpha',
+    'Intended Audience :: System Administrators',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+]
+
+[project.urls]
+Homepage = "https://github.com/nipil/acme-tiny-dns-persistent"
+Documentation = "https://github.com/nipil/acme-tiny-dns-persistent"
+Repository = "https://github.com/nipil/acme-tiny-dns-persistent.gits"
+"Bug Tracker" = "https://github.com/nipil/acme-tiny-dns-persistent/issues"
+
+[project.scripts]
+acme-tiny-dns-persistent = "acme_tiny_dns_persistent:main"

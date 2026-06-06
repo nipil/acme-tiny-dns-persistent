@@ -1,0 +1,13 @@
+{
+	"name": "Python 3",
+	"image": "mcr.microsoft.com/devcontainers/python:3-3.10-trixie",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"tamasfe.even-better-toml",
+				"ms-python.black-formatter",
+				"DavidAnson.vscode-markdownlint"
+			]
+		}
+	}
+}
