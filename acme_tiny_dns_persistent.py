@@ -86,10 +86,10 @@ def generate_rsa_private_key(bits: int) -> bytes:
     return private_key
 
 
-def save_private_key_file(private_key_file: Path, contents: bytes):
-    with open(private_key_file, "wb") as out_file:
+def save_private_file(private_file: Path, contents: bytes):
+    with open(private_file, "wb") as out_file:
         # SECURITY: by default, set to most restrictive : the user can change afterwards
-        os.chmod(private_key_file, mode=stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(private_file, mode=stat.S_IRUSR | stat.S_IWUSR)
         out_file.write(contents)
 
 
@@ -189,7 +189,7 @@ def ensure_account_key_exists(account_key_file: Path, bits: int) -> None:
         )
         return
     account_key = generate_rsa_private_key(bits)
-    save_private_key_file(account_key_file, account_key)
+    save_private_file(account_key_file, account_key)
     logging.info(f"Account key generated into {account_key_file}")
 
 
@@ -200,7 +200,7 @@ def ensure_domain_key_exists(
         logging.info(f"Domain key {domain_key_file} already exists, skipping creation")
         return
     domain_key = generate_rsa_private_key(bits)
-    save_private_key_file(domain_key_file, domain_key)
+    save_private_file(domain_key_file, domain_key)
     logging.info(f"Domain key generated into {domain_key_file}")
 
 
