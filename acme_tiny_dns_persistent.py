@@ -34,6 +34,7 @@ UTF8 = "utf-8"
 # acme protocol
 ACME_ALG = "RS256"
 ACME_AUTHORIZATIONS = "authorizations"
+ACME_CERTIFICATE = "certificate"
 ACME_CONTENT_TYPE = "application/jose+json"
 ACME_DNS_RECORD_NAME = "_validation-persist"
 ACME_DIR_NEW_ACCOUNT = "newAccount"
@@ -676,15 +677,17 @@ def cmd_certificate(args) -> None:
     directory = acme_get_url_directory(
         args.acme_directory_url, retries=args.bad_nonce_retries
     )
-    # do the order
+    # identification
     account_key_file = Path(args.account_key).expanduser()
+    identification = acme_identification_kid(args.account_url)
+    # create the order
     order = acme_create_new_order(
         directory[ACME_DIR_NEW_ORDER],
         domains,
         account_key_file=account_key_file,
         retries=args.bad_nonce_retries,
         new_nonce_url=directory[ACME_DIR_NEW_NONCE],
-        identification=acme_identification_kid(args.account_url),
+        identification=identification,
         err_msg="Error creating new order",
     )
     logging.info(
@@ -694,16 +697,34 @@ def cmd_certificate(args) -> None:
             order.data[ACME_AUTHORIZATIONS],
         )
     )
-    # FIXME: do the work before wait for completion
+    # TODO: process authorizations ?
+    # TODO: convert CSR to DER format
+    # TODO: finalize
+    #  poll the order to monitor when it's done
     finished_order = acme_poll_until_status_not_in(
         order.headers[HTTP_HEADER_LOCATION],
-        [ACME_STATUS_PENDING],
+        [ACME_STATUS_PENDING, ACME_STATUS_PROCESSING],
         account_key_file=account_key_file,
         retries=args.bad_nonce_retries,
         new_nonce_url=directory[ACME_DIR_NEW_NONCE],
-        identification=acme_identification_kid(args.account_url),
+        identification=identification,
         err_msg="Error polling order",
     )
+    logging.critical(f"Order complete: {finished_order=}")
+    # check for success
+    if finished_order.data[ACME_STATUS] != ACME_VALID:
+        raise AppError("Order failed: {0}".format(finished_order.data))
+    # download the certificate
+    certificate = acme_send_signed_request(
+        finished_order.data[ACME_CERTIFICATE],
+        None,
+        account_key_file=account_key_file,
+        retries=args.bad_nonce_retries,
+        new_nonce_url=directory[ACME_DIR_NEW_NONCE],
+        identification=identification,
+        err_msg="Error downloading certificate",
+    )
+    logging.critical(f"Certificate received: {certificate=}")
 
 
 def run(argv) -> None:
