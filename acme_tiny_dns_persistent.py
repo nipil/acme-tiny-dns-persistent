@@ -3,12 +3,13 @@
 from argparse import ArgumentParser
 from base64 import urlsafe_b64encode
 from binascii import unhexlify
+from dataclasses import dataclass, asdict
 from hashlib import sha256
 from pathlib import Path
 from subprocess import Popen, PIPE
 from sys import exit
 from time import sleep
-from typing import Any, Tuple
+from typing import Any
 from urllib.request import Request, urlopen
 import logging, json, os, re, stat, sys
 
@@ -113,9 +114,14 @@ def save_public_file(public_file: Path, contents: bytes):
         out_file.write(contents)
 
 
-def request_with_json_reply(
-    url: str, data, *, err_msg: str
-) -> Tuple[dict, int, dict[str, str]]:
+@dataclass
+class Reply:
+    data: dict[str, Any]
+    headers: dict[str, str]
+    status: int
+
+
+def request_with_json_reply(url: str, data, *, err_msg: str) -> Reply:
     headers = {
         "Content-Type": ACME_CONTENT_TYPE,
         "User-Agent": USER_AGENT,
@@ -149,10 +155,16 @@ def request_with_json_reply(
         data = json.loads(data)
     except ValueError as e:
         raise AppError(f"ACME response json parsing failed ({err_msg}) : {data}")
-    return (data, status, headers)
+    return Reply(data=data, headers=headers, status=status)
 
 
-def get_public_bytes_from_private_rsa_key(key_file: Path) -> Tuple[bytes, bytes]:
+@dataclass
+class PublicKeyValues:
+    modulus: bytes
+    exponent: bytes
+
+
+def get_public_bytes_from_private_rsa_key(key_file: Path) -> PublicKeyValues:
     # ask openssl to parse the key and print it as readable output
     out = run_command(
         # modernized openssl 3.0+ command, equivalent to
@@ -177,7 +189,7 @@ def get_public_bytes_from_private_rsa_key(key_file: Path) -> Tuple[bytes, bytes]
     pub_mod = re.sub(r"(\s|:)", "", pub_mod)  # remove known non-hex characters
     pub_mod = pub_mod.encode(UTF8)  # encode ascii text as bytes
     pub_mod = unhexlify(pub_mod)  # extract bytes from hex text
-    return pub_mod, pub_exp
+    return PublicKeyValues(modulus=pub_mod, exponent=pub_exp)
 
 
 def sign_with_key_file(data: bytes, key_file: Path) -> bytes:
@@ -301,22 +313,18 @@ def get_csr_domains(csr_file: Path) -> list[str]:
 # ---- ACME -----------------------------------------------------------------
 
 
-def acme_request(
-    url: str, req_data=None, *, err_msg: str
-) -> Tuple[dict[str, Any], int, dict[str, str]]:
-    resp_data, status, headers = request_with_json_reply(url, req_data, err_msg=err_msg)
-    if status == 400 and resp_data["type"] == ACME_ERROR_BAD_NONCE:
+def acme_request(url: str, req_data=None, *, err_msg: str) -> Reply:
+    resp = request_with_json_reply(url, req_data, err_msg=err_msg)
+    if resp.status == 400 and resp.data["type"] == ACME_ERROR_BAD_NONCE:
         raise AcmeBadNonce(f"ACME request `bad nonce` ({err_msg})")
-    if status not in [200, 201, 204]:
-        raise AppError(
-            f"ACME request failed ({err_msg}): {url=} {req_data=} {status=} {resp_data=}"
-        )
-    return resp_data, status, headers
+    if resp.status not in [200, 201, 204]:
+        raise AppError(f"ACME request failed ({err_msg}): {url=} {req_data=} {resp=}")
+    return resp
 
 
 def acme_request_with_bad_nonce_retries(
     url: str, req_data=None, *, err_msg: str, retries: int
-) -> Tuple[dict[str, Any], int, dict[str, str]]:
+) -> Reply:
     retry = retries
     while True:
         retry = retry - 1
@@ -330,13 +338,13 @@ def acme_request_with_bad_nonce_retries(
             continue
 
 
-def acme_get_url_directory(url: str, *, retries: int):
+def acme_get_url_directory(url: str, *, retries: int) -> dict[str, Any]:
     logging.debug("Getting ACME url directory...")
-    directory, _, _ = acme_request_with_bad_nonce_retries(
+    directory = acme_request_with_bad_nonce_retries(
         url, err_msg="getting directory urls", retries=retries
     )
-    logging.debug(f"Directory found: {directory}")
-    return directory
+    logging.debug(f"Directory found: {directory.data=}")
+    return directory.data
     # {'PnuDTgQP-bo': 'https://community.letsencrypt.org/t/adding-random-entries-to-the-directory/33417',
     #  'keyChange': 'https://acme-staging-v02.api.letsencrypt.org/acme/key-change',
     #  'meta': {'caaIdentities': ['letsencrypt.org'],
@@ -355,10 +363,10 @@ def acme_get_url_directory(url: str, *, retries: int):
 
 def acme_get_nonce(new_nonce_url: str, *, err_msg: str, retries: int) -> str:
     logging.debug("Getting new nonce...")
-    _, _, headers = acme_request_with_bad_nonce_retries(
+    nonce = acme_request_with_bad_nonce_retries(
         new_nonce_url, err_msg=err_msg, retries=retries
     )
-    nonce = headers[ACME_REPLAY_NONCE]
+    nonce = nonce.headers[ACME_REPLAY_NONCE]
     logging.debug(f"Got new ACME nonce: {nonce}")
     return nonce
 
@@ -372,7 +380,7 @@ def acme_send_signed_request(
     new_nonce_url: str,
     err_msg: str,
     retries: int,
-):
+) -> Reply:
     # get a new nonce for anti-replay protection, and build content
     new_nonce = acme_get_nonce(new_nonce_url, err_msg=err_msg, retries=retries)
     # build protected content
@@ -401,12 +409,12 @@ def acme_send_signed_request(
     )
 
 
-def acme_jwk_from_public_key(pub_mod: bytes, pub_exp: bytes) -> dict[str, str]:
+def acme_jwk_from_public_key(pub_key: PublicKeyValues) -> dict[str, str]:
     # build the "json web key" struct holding our RSA account key public parts
     return {
-        "e": base64_encode_safe_for_url_and_filesystem(pub_exp),
+        "e": base64_encode_safe_for_url_and_filesystem(pub_key.exponent),
         "kty": ACME_KTY,
-        "n": base64_encode_safe_for_url_and_filesystem(pub_mod),
+        "n": base64_encode_safe_for_url_and_filesystem(pub_key.modulus),
     }
 
 
@@ -441,6 +449,15 @@ def acme_get_account_key_thumbprint(jwk: dict) -> str:
     return base64_encode_safe_for_url_and_filesystem(thumbprint)
 
 
+@dataclass
+class AcmeAccountInfo:
+    account_url: str
+    created_at: str
+    source: str
+    status: str
+    instructions: str | None
+
+
 def acme_ensure_account_is_registered(
     account_key_file: Path,
     jwk: dict[str, str],
@@ -448,7 +465,7 @@ def acme_ensure_account_is_registered(
     new_account_url: str,
     new_nonce_url: str,
     retries: int,
-):
+) -> AcmeAccountInfo:
     """
     On first call, status = 200, which means account was registered
     On following calls, status = 201, which means account was found
@@ -467,7 +484,7 @@ def acme_ensure_account_is_registered(
     logging.debug("Registering account...")
     # prepare an account payload without email contact
     register_payload = {ACME_TOS_AGREED: True}
-    account, status, headers = acme_send_signed_request(
+    account = acme_send_signed_request(
         new_account_url,
         register_payload,
         account_key_file=account_key_file,
@@ -477,13 +494,27 @@ def acme_ensure_account_is_registered(
         retries=retries,
     )
     # display register result
-    logging.debug(f"Account registration reply: {account=} {status=} {headers=}")
-    return {
-        "result": "registered" if status == 201 else "found",
-        "status": account["status"],
-        "created_at": account["createdAt"],
-        "account_url": headers[HTTP_HEADER_LOCATION],
-    }
+    logging.debug(
+        f"Account registration reply: {account.data=} {account.status=} {account.headers=}"
+    )
+    return AcmeAccountInfo(
+        account_url=account.headers[HTTP_HEADER_LOCATION],
+        created_at=account.data["createdAt"],
+        source="registered" if account.status == 201 else "found",
+        status=account.data["status"],
+        instructions=(
+            f"Now Create a TXT record named `{RECORD_NAME}` at the root of your dns "
+            "zone. The record value has following structure, adapted for your "
+            "certificate registry : `REGISTRAR_DOMAIN; "
+            "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`. "
+            "Example for the domain `example.com`, with LetsEncrypt registry, and a "
+            "registered account url: `_validation-persist.example.com TXT "
+            "letsencrypt.org; "
+            "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456789`."
+            "Then you can run the commands of this tool, to get a certificate for "
+            "your example.com domain, using that ACME-compatible registry account"
+        ),
+    )
 
 
 # ---- CLI ------------------------------------------------------------------
@@ -493,8 +524,8 @@ def cmd_register(args) -> None:
     # do the crypto
     account_key_file = Path(args.account_key).expanduser()
     ensure_account_key_exists(account_key_file, args.bits)
-    pub_mod, pub_exp = get_public_bytes_from_private_rsa_key(args.account_key)
-    jwk = acme_jwk_from_public_key(pub_mod, pub_exp)
+    pub_key_values = get_public_bytes_from_private_rsa_key(args.account_key)
+    jwk = acme_jwk_from_public_key(pub_key_values)
     # do the networking
     directory = acme_get_url_directory(
         args.acme_directory_url, retries=args.bad_nonce_retries
@@ -506,25 +537,8 @@ def cmd_register(args) -> None:
         new_account_url=directory[ACME_DIR_NEW_ACCOUNT],
         new_nonce_url=directory[ACME_DIR_NEW_NONCE],
     )
-    # update result with instructions
-    result.update(
-        {
-            "instructions": (
-                f"Now Create a TXT record named `{RECORD_NAME}` at the root of your dns "
-                "zone. The record value has following structure, adapted for your "
-                "certificate registry : `REGISTRAR_DOMAIN; "
-                "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`. "
-                "Example for the domain `example.com`, with LetsEncrypt registry, and a "
-                "registered account url: `_validation-persist.example.com TXT "
-                "letsencrypt.org; "
-                "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456789`."
-                "Then you can run the commands of this tool, to get a certificate for "
-                "your example.com domain, using that ACME-compatible registry account"
-            )
-        }
-    )
     # show to the user on a single line (easier for later parsing)
-    print(json.dumps(result, sort_keys=True, indent=None))
+    print(json.dumps(asdict(result), sort_keys=True, indent=None))
 
 
 def cmd_domains(args) -> None:
