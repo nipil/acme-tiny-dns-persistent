@@ -19,6 +19,7 @@ DEFAULT_ACCOUNT_KEY_NAME = "account.key"
 DEFAULT_ACCOUNT_KEY_SIZE = 4096
 DEFAULT_ACME_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 DEFAULT_BAD_NONCE_RETRY = 100
+DEFAULT_DOMAIN_CRT_NAME = "domain.crt"
 DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
 DEFAULT_DOMAIN_KEY_NAME = "domain.key"
 DEFAULT_DOMAIN_KEY_SIZE = 4096
@@ -227,6 +228,10 @@ def ensure_domain_key_exists(
 # do not provide IP addresss as domains, they would be marked as domains in SAN !
 def create_domain_signing_request(domain_key_file: Path, domains: list[str]) -> bytes:
     logging.debug(f"Creating signing request using {domain_key_file} for {domains}")
+    if len(domains) == 0:
+        raise AppError("A certificate signing request must have at least one domain")
+    # use first provided domain as CN (common name)
+    common_name = "CN={}".format(domains[0])
     # prepare SAN record like `subjectAltName = DNS:yoursite.com, DNS:www.yoursite.com`
     domains = [f"DNS:{domain}" for domain in domains]
     san_alternate_name = "subjectAltName = {}".format(", ".join(domains))
@@ -241,7 +246,7 @@ def create_domain_signing_request(domain_key_file: Path, domains: list[str]) -> 
             "-key",
             str(domain_key_file),
             "-subj",
-            "/",
+            f"/{common_name}",
             "-addext",
             san_alternate_name,
         ],
@@ -249,6 +254,48 @@ def create_domain_signing_request(domain_key_file: Path, domains: list[str]) -> 
     )
     logging.debug(f"Signing request created: {signing_request}")
     return signing_request
+
+
+def get_csr_domains(csr_file: Path) -> list[str]:
+    logging.debug(f"Getting list of domains from CSR {csr_file}")
+    domains = set()
+    # get CSR content as encoded text
+    domain_csr = run_command(
+        ["openssl", "req", "-in", str(csr_file), "-noout", "-text"],
+        err_msg=f"OpenSSL Error while parsing certificate signing request {csr_file}",
+    )
+    # decode as utf-8
+    try:
+        domain_csr = domain_csr.decode(UTF8)
+    except IOError as e:
+        raise AppError(f"Domain certificate UTF-8 decode failed for {csr_file} : {e}")
+    # extract domain from CN field if present
+    common_name = re.search(r"Subject:.*? CN\s?=\s?([^\s,;/]+)", domain_csr)
+    if common_name is not None:
+        common_name = common_name.group(1)
+        logging.debug(f"Found {common_name} CN in CSR")
+        domains.add(common_name)
+    # extract domains from SAN field
+    subject_alt_names = re.search(
+        r"X509v3 Subject Alternative Name: (?:critical)?\n +([^\n]+)\n",
+        domain_csr,
+        re.MULTILINE | re.DOTALL,
+    )
+    if subject_alt_names is not None:
+        subject_alt_names = subject_alt_names.group(1)
+        san_re = re.compile("DNS:(.*)")
+        for san in subject_alt_names.split(","):
+            san = san.strip()
+            domain = san_re.fullmatch(san)
+            if domain is None:
+                logging.warning(
+                    f"Could not extract domain from {san} while parsing CSR"
+                )
+                continue
+            domain = domain.group(1)
+            logging.debug(f"Found {domain} SAN in CSR")
+            domains.add(domain)
+    return sorted(domains)
 
 
 # ---- ACME -----------------------------------------------------------------
@@ -489,6 +536,12 @@ def cmd_domains(args) -> None:
     )
 
 
+def cmd_certificate(args) -> None:
+    domain_csr_file = Path(args.domain_csr).expanduser()
+    domains = get_csr_domains(domain_csr_file)
+    logging.debug(f"Found {domains=} in domain certificate signing request")
+
+
 def run(argv) -> None:
     parser = ArgumentParser()
     parser.add_argument(
@@ -514,6 +567,12 @@ def run(argv) -> None:
     sub.add_argument("--keep-domain-key", action="store_true")
     sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
     sub.add_argument("domain", nargs="+")
+
+    sub = parsers.add_parser("certificate")
+    sub.set_defaults(func=cmd_certificate)
+    sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
+    sub.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
+    sub.add_argument("--domain-crt", default=DEFAULT_DOMAIN_CRT_NAME)
 
     args = parser.parse_args(argv)
     logging.basicConfig(

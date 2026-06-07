@@ -29,6 +29,18 @@
                 "example.com",
                 "www.example.com"
             ]
+        },
+        {
+            "name": "Python Debugger: certificate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--log-level",
+                "debug",
+                "certificate"
+            ]
         }
     ]
 }
