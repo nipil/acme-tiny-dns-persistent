@@ -8,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from subprocess import Popen, PIPE
 from sys import exit
-from time import sleep
+from time import sleep, time
 from typing import Any
 from urllib.request import HTTPError, Request, urlopen
 import logging, json, os, re, stat, sys
@@ -24,21 +24,34 @@ DEFAULT_DOMAIN_CRT_NAME = "domain.crt"
 DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
 DEFAULT_DOMAIN_KEY_NAME = "domain.key"
 DEFAULT_DOMAIN_KEY_SIZE = 4096
+DEFAULT_POLLING_RETRY_SEC = 10
+DEFAULT_POLLING_TIMEOUT_SEC = 3600
+DEFAULT_RATE_LIMITED_RETRY_SEC = 60
+
 USER_AGENT = "acme-tiny-dns-persistent"
 UTF8 = "utf-8"
 
 # acme protocol
 ACME_ALG = "RS256"
+ACME_AUTHORIZATIONS = "authorizations"
 ACME_CONTENT_TYPE = "application/jose+json"
+ACME_DNS_RECORD_NAME = "_validation-persist"
 ACME_DIR_NEW_ACCOUNT = "newAccount"
 ACME_DIR_NEW_NONCE = "newNonce"
 ACME_DIR_NEW_ORDER = "newOrder"
 ACME_ERROR_BAD_NONCE = "urn:ietf:params:acme:error:badNonce"
+ACME_ERROR_RATE_LIMITED = "urn:ietf:params:acme:error:rateLimited"
+ACME_EXPIRES = "expires"
+ACME_FINALIZE = "finalize"
 ACME_KTY = "RSA"
 ACME_REPLAY_NONCE = "Replay-Nonce"
+ACME_STATUS = "status"
+ACME_STATUS_PENDING = "pending"
+ACME_STATUS_PROCESSING = "processing"
 ACME_TOS_AGREED = "termsOfServiceAgreed"
+ACME_VALID = "valid"
+
 HTTP_HEADER_LOCATION = "Location"
-RECORD_NAME = "_validation-persist"
 
 # ---- ERRORS ----------------------------------------------------------------
 
@@ -47,7 +60,15 @@ class AppError(Exception):
     pass
 
 
-class AcmeBadNonce(Exception):
+class AcmeError(Exception):
+    pass
+
+
+class AcmeBadNonce(AcmeError):
+    pass
+
+
+class AcmeRateLimited(AcmeError):
     pass
 
 
@@ -319,7 +340,9 @@ def get_csr_domains(csr_file: Path) -> list[str]:
 def acme_request(url: str, req_data=None, *, err_msg: str) -> Reply:
     resp = request_with_json_reply(url, req_data, err_msg=err_msg)
     if resp.status == 400 and resp.data["type"] == ACME_ERROR_BAD_NONCE:
-        raise AcmeBadNonce(f"ACME request `bad nonce` ({err_msg})")
+        raise AcmeBadNonce(f"ACME request `bad nonce` ({err_msg}) for {url}")
+    if resp.status == 503 and resp.data["type"] == ACME_ERROR_RATE_LIMITED:
+        raise AcmeRateLimited(f"ACME request `rate limited` ({err_msg}) for {url}")
     if resp.status not in [200, 201, 204]:
         raise AppError(f"ACME request failed ({err_msg}): {url=} {req_data=} {resp=}")
     return resp
@@ -339,6 +362,9 @@ def acme_request_with_bad_nonce_retries(
             logging.warning(e)
             sleep(1)
             continue
+        except AcmeRateLimited as e:
+            logging.warning(e)
+            sleep(DEFAULT_RATE_LIMITED_RETRY_SEC)
 
 
 def acme_get_url_directory(url: str, *, retries: int) -> dict[str, Any]:
@@ -376,7 +402,7 @@ def acme_get_nonce(new_nonce_url: str, *, err_msg: str, retries: int) -> str:
 
 def acme_send_signed_request(
     url: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | None,
     *,
     account_key_file: Path,
     identification: dict[str, Any],
@@ -504,9 +530,9 @@ def acme_ensure_account_is_registered(
         account_url=account.headers[HTTP_HEADER_LOCATION],
         created_at=account.data["createdAt"],
         source="registered" if account.status == 201 else "found",
-        status=account.data["status"],
+        status=account.data[ACME_STATUS],
         instructions=(
-            f"Now Create a TXT record named `{RECORD_NAME}` at the root of your dns "
+            f"Now Create a TXT record named `{ACME_DNS_RECORD_NAME}` at the root of your dns "
             "zone. The record value has following structure, adapted for your "
             "certificate registry : `REGISTRAR_DOMAIN; "
             "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`. "
@@ -568,6 +594,43 @@ def acme_create_new_order(
     # }
 
 
+def acme_poll_until_status_not_in(
+    url: str,
+    wait_statuses: list[str],
+    *,
+    account_key_file: Path,
+    identification: dict[str, Any],
+    new_nonce_url: str,
+    err_msg: str,
+    retries: int,
+) -> Reply:
+    logging.debug(f"Polling {url} until status is not in  for {wait_statuses=}")
+    timeout_sec = DEFAULT_POLLING_TIMEOUT_SEC
+    start = time()
+    while True:
+        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            raise AppError(
+                f"Polling timeout ({timeout_sec} seconds) reached: {err_msg}"
+            )
+        result = acme_send_signed_request(
+            url,
+            None,
+            account_key_file=account_key_file,
+            identification=identification,
+            err_msg=err_msg,
+            new_nonce_url=new_nonce_url,
+            retries=retries,
+        )
+        logging.debug(f"Polling {url} result: {result=}")
+        status = result.data[ACME_STATUS]
+        if status in wait_statuses:
+            sleep(DEFAULT_POLLING_RETRY_SEC)
+            logging.debug(f"Time elapsed: {int(time() - start)}")
+            continue
+        logging.debug(f"Polling {url} finished with status {status}")
+        return result
+
+
 # ---- CLI ------------------------------------------------------------------
 
 
@@ -615,7 +678,7 @@ def cmd_certificate(args) -> None:
     )
     # do the order
     account_key_file = Path(args.account_key).expanduser()
-    acme_create_new_order(
+    order = acme_create_new_order(
         directory[ACME_DIR_NEW_ORDER],
         domains,
         account_key_file=account_key_file,
@@ -623,6 +686,23 @@ def cmd_certificate(args) -> None:
         new_nonce_url=directory[ACME_DIR_NEW_NONCE],
         identification=acme_identification_kid(args.account_url),
         err_msg="Error creating new order",
+    )
+    logging.info(
+        "Created Order {} which expires {} with authorizations {}".format(
+            order.headers[HTTP_HEADER_LOCATION],
+            order.data[ACME_EXPIRES],
+            order.data[ACME_AUTHORIZATIONS],
+        )
+    )
+    # FIXME: do the work before wait for completion
+    finished_order = acme_poll_until_status_not_in(
+        order.headers[HTTP_HEADER_LOCATION],
+        [ACME_STATUS_PENDING],
+        account_key_file=account_key_file,
+        retries=args.bad_nonce_retries,
+        new_nonce_url=directory[ACME_DIR_NEW_NONCE],
+        identification=acme_identification_kid(args.account_url),
+        err_msg="Error polling order",
     )
 
 
