@@ -368,14 +368,20 @@ def acme_send_signed_request(
     payload: dict[str, Any],
     *,
     account_key_file: Path,
-    jwk: dict[str, str],
+    identification: dict[str, Any],
     new_nonce_url: str,
     err_msg: str,
     retries: int,
 ):
     # get a new nonce for anti-replay protection, and build content
     new_nonce = acme_get_nonce(new_nonce_url, err_msg=err_msg, retries=retries)
-    protected_coded = acme_encode_protected(url, jwk, new_nonce)
+    # build protected content
+    protected = {"url": url, "alg": ACME_ALG, "nonce": new_nonce}
+    protected.update(identification)
+    protected_coded = base64_encode_safe_for_url_and_filesystem(
+        json.dumps(protected).encode(UTF8)
+    )
+    # build encoded payload
     payload_coded = acme_encode_payload(payload)
     # prepare signature input and sign it with the account key
     signature_input_coded = acme_encode_signature_input(protected_coded, payload_coded)
@@ -395,10 +401,8 @@ def acme_send_signed_request(
     )
 
 
-def acme_json_web_key_from_public_account_key(
-    pub_mod: bytes, pub_exp: bytes
-) -> dict[str, str]:
-    # build the struct holding our RSA account key public parts
+def acme_jwk_from_public_key(pub_mod: bytes, pub_exp: bytes) -> dict[str, str]:
+    # build the "json web key" struct holding our RSA account key public parts
     return {
         "e": base64_encode_safe_for_url_and_filesystem(pub_exp),
         "kty": ACME_KTY,
@@ -412,17 +416,17 @@ def acme_encode_payload(payload: dict[str, Any] | None) -> str:
     return base64_encode_safe_for_url_and_filesystem(json.dumps(payload).encode(UTF8))
 
 
-def acme_encode_protected(
-    url: str,
-    jwk: dict[str, str],
-    new_nonce: str,
-) -> str:
-    protected = {"url": url, "jwk": jwk, "alg": ACME_ALG, "nonce": new_nonce}
-    # FIXME jwk becomes kid->location once we have tried to register and account is found
-    # protected.update(
-    #     {"jwk": jwk} if acct_headers is None else {"kid": acct_headers["Location"]}
-    # )
-    return base64_encode_safe_for_url_and_filesystem(json.dumps(protected).encode(UTF8))
+def acme_identification_jwk(jwk: dict[str, str]) -> dict[str, Any]:
+    # when the account does not exist (before register)
+    # when the account has been found (before login)
+    # `jwk` is the public key stuff :
+    return {"jwk": jwk}
+
+
+def acme_identification_kid(kid: str) -> dict[str, Any]:
+    # when the account exists `kid` contains `account_url` like
+    # https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456789
+    return {"kid": kid}
 
 
 def acme_encode_signature_input(protected_coded: str, payload_coded: str) -> bytes:
@@ -467,7 +471,7 @@ def acme_ensure_account_is_registered(
         new_account_url,
         register_payload,
         account_key_file=account_key_file,
-        jwk=jwk,
+        identification=acme_identification_jwk(jwk),
         err_msg="Error registering account with public key",
         new_nonce_url=new_nonce_url,
         retries=retries,
@@ -490,7 +494,7 @@ def cmd_register(args) -> None:
     account_key_file = Path(args.account_key).expanduser()
     ensure_account_key_exists(account_key_file, args.bits)
     pub_mod, pub_exp = get_public_bytes_from_private_rsa_key(args.account_key)
-    jwk = acme_json_web_key_from_public_account_key(pub_mod, pub_exp)
+    jwk = acme_jwk_from_public_key(pub_mod, pub_exp)
     # do the networking
     directory = acme_get_url_directory(
         args.acme_directory_url, retries=args.bad_nonce_retries
