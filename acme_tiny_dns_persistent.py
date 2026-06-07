@@ -26,6 +26,8 @@ DEFAULT_ACCOUNT_KEY_NAME = "account.key"
 DEFAULT_ACCOUNT_KEY_SIZE = 4096
 DEFAULT_ACME_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 DEFAULT_BAD_NONCE_RETRY = 100
+DEFAULT_DOMAIN_KEY_NAME = "domain.key"
+DEFAULT_DOMAIN_KEY_SIZE = 4096
 HTTP_HEADER_LOCATION = "Location"
 RECORD_NAME = "_validation-persist"
 USER_AGENT = "acme-tiny-dns-persistent"
@@ -368,6 +370,16 @@ def acme_ensure_account_is_registered(
     }
 
 
+def acme_ensure_domain_key_exists(
+    domain_key_file: Path, bits: int, keep_domain_key: bool
+) -> None:
+    if domain_key_file.is_file() and keep_domain_key:
+        logging.info(f"Domain key {domain_key_file} already exists, skipping creation")
+        return
+    generate_rsa_private_key(domain_key_file, bits)
+    logging.info(f"Domain key generated into {domain_key_file}")
+
+
 # ---- CLI ------------------------------------------------------------------
 
 
@@ -409,6 +421,11 @@ def cmd_register(args) -> None:
     print(json.dumps(result, sort_keys=True, indent=None))
 
 
+def cmd_domains(args) -> None:
+    domain_key_file = Path(args.domain_key).expanduser()
+    acme_ensure_domain_key_exists(domain_key_file, args.bits, args.keep_domain_key)
+
+
 def run(argv) -> None:
     parser = ArgumentParser()
     parser.add_argument(
@@ -426,6 +443,13 @@ def run(argv) -> None:
     sub.set_defaults(func=cmd_register)
     sub.add_argument("--bits", type=int, default=DEFAULT_ACCOUNT_KEY_SIZE)
     sub.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
+
+    sub = parsers.add_parser("domains")
+    sub.set_defaults(func=cmd_domains)
+    sub.add_argument("--bits", type=int, default=DEFAULT_DOMAIN_KEY_SIZE)
+    sub.add_argument("--domain-key", default=DEFAULT_DOMAIN_KEY_NAME)
+    sub.add_argument("--keep-domain-key", action="store_true")
+    sub.add_argument("domain", nargs="+")
 
     args = parser.parse_args(argv)
     logging.basicConfig(

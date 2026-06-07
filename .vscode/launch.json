@@ -15,6 +15,20 @@
                 "debug",
                 "register"
             ]
+        },
+        {
+            "name": "Python Debugger: domains",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--log-level",
+                "debug",
+                "domains",
+                "example.com",
+                "www.example.com"
+            ]
         }
     ]
 }
