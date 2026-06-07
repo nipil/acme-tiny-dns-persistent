@@ -14,6 +14,18 @@ import logging, json, os, re, stat, sys
 
 # ---- CONSTANTS -------------------------------------------------------------
 
+# application
+DEFAULT_ACCOUNT_KEY_NAME = "account.key"
+DEFAULT_ACCOUNT_KEY_SIZE = 4096
+DEFAULT_ACME_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+DEFAULT_BAD_NONCE_RETRY = 100
+DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
+DEFAULT_DOMAIN_KEY_NAME = "domain.key"
+DEFAULT_DOMAIN_KEY_SIZE = 4096
+USER_AGENT = "acme-tiny-dns-persistent"
+UTF8 = "utf-8"
+
+# acme protocol
 ACME_ALG = "RS256"
 ACME_CONTENT_TYPE = "application/jose+json"
 ACME_DIR_NEW_ACCOUNT = "newAccount"
@@ -22,17 +34,8 @@ ACME_ERROR_BAD_NONCE = "urn:ietf:params:acme:error:badNonce"
 ACME_KTY = "RSA"
 ACME_REPLAY_NONCE = "Replay-Nonce"
 ACME_TOS_AGREED = "termsOfServiceAgreed"
-DEFAULT_ACCOUNT_KEY_NAME = "account.key"
-DEFAULT_ACCOUNT_KEY_SIZE = 4096
-DEFAULT_ACME_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
-DEFAULT_BAD_NONCE_RETRY = 100
-DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
-DEFAULT_DOMAIN_KEY_NAME = "domain.key"
-DEFAULT_DOMAIN_KEY_SIZE = 4096
 HTTP_HEADER_LOCATION = "Location"
 RECORD_NAME = "_validation-persist"
-USER_AGENT = "acme-tiny-dns-persistent"
-UTF8 = "utf-8"
 
 # ---- ERRORS ----------------------------------------------------------------
 
