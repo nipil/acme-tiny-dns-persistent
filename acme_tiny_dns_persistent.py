@@ -68,8 +68,8 @@ def run_command(
     return out
 
 
-def generate_rsa_private_key(private_key_file, bits):
-    out = run_command(
+def generate_rsa_private_key(bits):
+    return run_command(
         # modernized openssl 3.0+ command, equivalent to
         # `openssl genrsa 4096`
         [
@@ -81,10 +81,12 @@ def generate_rsa_private_key(private_key_file, bits):
             f"rsa_keygen_bits:{bits}",
         ]
     )
+
+def save_private_key_file(private_key_file: Path, contents: bytes):
     with open(private_key_file, "wb") as out_file:
         # SECURITY: by default, set to most restrictive : the user can change afterwards
         os.chmod(private_key_file, mode=stat.S_IRUSR | stat.S_IWUSR)
-        out_file.write(out)
+        out_file.write(contents)
 
 
 def request_with_json_reply(
@@ -321,7 +323,8 @@ def acme_ensure_account_key_exists(account_key_file: Path, bits: int) -> None:
             f"Account key {account_key_file} already exists, skipping creation"
         )
         return
-    generate_rsa_private_key(account_key_file, bits)
+    account_key = generate_rsa_private_key(bits)
+    save_private_key_file(account_key_file, account_key)
     logging.info(f"Account key generated into {account_key_file}")
 
 
@@ -376,7 +379,8 @@ def acme_ensure_domain_key_exists(
     if domain_key_file.is_file() and keep_domain_key:
         logging.info(f"Domain key {domain_key_file} already exists, skipping creation")
         return
-    generate_rsa_private_key(domain_key_file, bits)
+    domain_key = generate_rsa_private_key(bits)
+    save_private_key_file(domain_key_file, domain_key)
     logging.info(f"Domain key generated into {domain_key_file}")
 
 
