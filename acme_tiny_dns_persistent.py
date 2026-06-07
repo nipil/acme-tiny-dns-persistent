@@ -66,7 +66,7 @@ def run_command(
     return out
 
 
-def generate_rsa_private_key(key_file, bits):
+def generate_rsa_private_key(private_key_file, bits):
     out = run_command(
         # modernized openssl 3.0+ command, equivalent to
         # `openssl genrsa 4096`
@@ -79,7 +79,7 @@ def generate_rsa_private_key(key_file, bits):
             f"rsa_keygen_bits:{bits}",
         ]
     )
-    with open(key_file, "wb") as out_file:
+    with open(private_key_file, "wb") as out_file:
         out_file.write(out)
 
 
@@ -241,7 +241,7 @@ def acme_send_signed_request(
     url: str,
     payload: dict[str, Any],
     *,
-    key_file: Path,
+    account_key_file: Path,
     jwk: dict[str, str],
     new_nonce_url: str,
     err_msg: str,
@@ -253,7 +253,7 @@ def acme_send_signed_request(
     payload_coded = acme_encode_payload(payload)
     # prepare signature input and sign it with the account key
     signature_input_coded = acme_encode_signature_input(protected_coded, payload_coded)
-    signature_bytes = sign_with_key_file(signature_input_coded, key_file)
+    signature_bytes = sign_with_key_file(signature_input_coded, account_key_file)
     # build the final request payload and send the request
     data = json.dumps(
         {
@@ -311,16 +311,18 @@ def acme_get_account_key_thumbprint(jwk: dict) -> str:
     return base64_encode_safe_for_url_and_filesystem(thumbprint)
 
 
-def acme_ensure_account_key_exists(key_file: Path, bits: int) -> None:
-    if key_file.is_file():
-        logging.info(f"Account key {key_file} already exists, skipping creation")
+def acme_ensure_account_key_exists(account_key_file: Path, bits: int) -> None:
+    if account_key_file.is_file():
+        logging.info(
+            f"Account key {account_key_file} already exists, skipping creation"
+        )
         return
-    generate_rsa_private_key(key_file, bits)
-    logging.info(f"Account key generated into {key_file}")
+    generate_rsa_private_key(account_key_file, bits)
+    logging.info(f"Account key generated into {account_key_file}")
 
 
 def acme_ensure_account_is_registered(
-    key_file: Path,
+    account_key_file: Path,
     jwk: dict[str, str],
     *,
     new_account_url: str,
@@ -348,7 +350,7 @@ def acme_ensure_account_is_registered(
     account, status, headers = acme_send_signed_request(
         new_account_url,
         register_payload,
-        key_file=key_file,
+        account_key_file=account_key_file,
         jwk=jwk,
         err_msg="Error registering account with public key",
         new_nonce_url=new_nonce_url,
@@ -369,16 +371,16 @@ def acme_ensure_account_is_registered(
 
 def cmd_register(args) -> None:
     # do the crypto
-    key_file = Path(args.file).expanduser()
-    acme_ensure_account_key_exists(key_file, args.bits)
-    pub_mod, pub_exp = get_public_bytes_from_private_rsa_key(args.file)
+    account_key_file = Path(args.account_key).expanduser()
+    acme_ensure_account_key_exists(account_key_file, args.bits)
+    pub_mod, pub_exp = get_public_bytes_from_private_rsa_key(args.account_key)
     jwk = acme_json_web_key_from_public_account_key(pub_mod, pub_exp)
     # do the networking
     directory = acme_get_url_directory(
         args.acme_directory_url, retries=args.bad_nonce_retries
     )
     result = acme_ensure_account_is_registered(
-        key_file,
+        account_key_file,
         jwk,
         retries=args.bad_nonce_retries,
         new_account_url=directory[ACME_DIR_NEW_ACCOUNT],
@@ -421,7 +423,7 @@ def run(argv) -> None:
     sub = parsers.add_parser("register")
     sub.set_defaults(func=cmd_register)
     sub.add_argument("--bits", type=int, default=DEFAULT_ACCOUNT_KEY_SIZE)
-    sub.add_argument("--file", default=DEFAULT_ACCOUNT_KEY_NAME)
+    sub.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
 
     args = parser.parse_args(argv)
     logging.basicConfig(
