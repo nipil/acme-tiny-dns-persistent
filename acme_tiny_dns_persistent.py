@@ -66,6 +66,23 @@ def run_command(
     return out
 
 
+def generate_rsa_private_key(key_file, bits):
+    out = run_command(
+        # modernized openssl 3.0+ command, equivalent to
+        # `openssl genrsa 4096`
+        [
+            "openssl",
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            f"rsa_keygen_bits:{bits}",
+        ]
+    )
+    with open(key_file, "wb") as out_file:
+        out_file.write(out)
+
+
 def request_with_json_reply(
     url: str, data, *, err_msg: str
 ) -> Tuple[dict, int, dict[str, str]]:
@@ -298,20 +315,7 @@ def acme_ensure_account_key_exists(key_file: Path, bits: int) -> None:
     if key_file.is_file():
         logging.info(f"Account key {key_file} already exists, skipping creation")
         return
-    out = run_command(
-        # modernized openssl 3.0+ command, equivalent to
-        # `openssl genrsa 4096`
-        [
-            "openssl",
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            f"rsa_keygen_bits:{bits}",
-        ]
-    )
-    with open(key_file, "wb") as out_file:
-        out_file.write(out)
+    generate_rsa_private_key(key_file, bits)
     logging.info(f"Account key generated into {key_file}")
 
 
