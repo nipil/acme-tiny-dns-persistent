@@ -803,6 +803,9 @@ def run(argv) -> None:
 def main(argv) -> None:
     try:
         run(argv)
+    except KeyboardInterrupt:
+        logging.warning(f"Interrupted by user")
+        exit(1)
     except AppError as e:
         logging.critical(f"Fatal: {e}")
         exit(1)
