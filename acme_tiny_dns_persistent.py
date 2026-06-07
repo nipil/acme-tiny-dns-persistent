@@ -68,8 +68,9 @@ def run_command(
     return out
 
 
-def generate_rsa_private_key(bits):
-    return run_command(
+def generate_rsa_private_key(bits: int) -> bytes:
+    logging.debug(f"Generating private key with {bits} bits")
+    private_key = run_command(
         # modernized openssl 3.0+ command, equivalent to
         # `openssl genrsa 4096`
         [
@@ -81,6 +82,8 @@ def generate_rsa_private_key(bits):
             f"rsa_keygen_bits:{bits}",
         ]
     )
+    logging.debug(f"Private key generated: {private_key}")
+    return private_key
 
 
 def save_private_key_file(private_key_file: Path, contents: bytes):
