@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: register",
+            "name": "Python Debugger: authorize",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
@@ -13,36 +13,18 @@
             "args": [
                 "--log-level",
                 "debug",
-                "register"
-            ]
-        },
-        {
-            "name": "Python Debugger: domains",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "args": [
-                "--log-level",
-                "debug",
-                "domains",
+                "authorize",
+                // "--account-register",
                 "example.com",
-                "www.example.com"
+                "www.example.com",
+                // "--resume-order-url",
+                // "https://acme-staging-v02.api.letsencrypt.org/acme/order/123456789/41077498363",
+                // "--resume-authz-url",
+                // "https://acme-staging-v02.api.letsencrypt.org/acme/authz/123456789/2007080953",
+                "--policy-wildcard",
+                "--persist-until",
+                "2500000000"
             ]
         },
-        {
-            "name": "Python Debugger: certificate",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "args": [
-                "--log-level",
-                "debug",
-                "certificate",
-                "--account-url",
-                "https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456789"
-            ]
-        }
     ]
 }

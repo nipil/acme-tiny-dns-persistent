@@ -160,4 +160,8 @@ I refactored the code to make it more readable and understandable (for me at lea
 
 ## TODO
 
-- Mention `persistUntil` in the documentation once the spec is stable
+- `persistUntil=<unix_timestamp_sec>` to limit how long the record stays valid
+- `policy=wildcard` in the documentation to handle wildcard certificates
+
+The ACME account private key becomes the new "crown jewel" — if it's
+compromised, an attacker could reuse your persistent record.
