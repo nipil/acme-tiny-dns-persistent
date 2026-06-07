@@ -380,25 +380,25 @@ def cmd_register(args) -> None:
         new_account_url=directory[ACME_DIR_NEW_ACCOUNT],
         new_nonce_url=directory[ACME_DIR_NEW_NONCE],
     )
-    # do the result display on STDOUT
-    print(json.dumps(result, sort_keys=True, indent=4))
-    # do the instuction display on STDERR
-    if args.no_instructions:
-        return
-    logging.critical(
-        (
-            f"Now Create a TXT record named `{RECORD_NAME}` at the root of your dns "
-            "zone. The record value has following structure, adapted for your "
-            "certificate registry : `REGISTRAR_DOMAIN; "
-            "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`. "
-            "Example for the domain `example.com`, with LetsEncrypt registry, and a "
-            "registered account url: `_validation-persist.example.com TXT "
-            "letsencrypt.org; "
-            "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456789`."
-            "Then you can run the commands of this tool, to get a certificate for "
-            "your example.com domain, using that ACME-compatible registry account"
-        )
+    # update result with instructions
+    result.update(
+        {
+            "instructions": (
+                f"Now Create a TXT record named `{RECORD_NAME}` at the root of your dns "
+                "zone. The record value has following structure, adapted for your "
+                "certificate registry : `REGISTRAR_DOMAIN; "
+                "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`. "
+                "Example for the domain `example.com`, with LetsEncrypt registry, and a "
+                "registered account url: `_validation-persist.example.com TXT "
+                "letsencrypt.org; "
+                "accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456789`."
+                "Then you can run the commands of this tool, to get a certificate for "
+                "your example.com domain, using that ACME-compatible registry account"
+            )
+        }
     )
+    # show to the user on a single line (easier for later parsing)
+    print(json.dumps(result, sort_keys=True, indent=None))
 
 
 def run(argv) -> None:
@@ -418,7 +418,6 @@ def run(argv) -> None:
     sub.set_defaults(func=cmd_register)
     sub.add_argument("--bits", type=int, default=DEFAULT_ACCOUNT_KEY_SIZE)
     sub.add_argument("--file", default=DEFAULT_ACCOUNT_KEY_NAME)
-    sub.add_argument("--no-instructions", action="store_true")
 
     args = parser.parse_args(argv)
     logging.basicConfig(
