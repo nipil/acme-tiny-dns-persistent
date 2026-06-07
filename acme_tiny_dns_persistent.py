@@ -26,6 +26,7 @@ DEFAULT_ACCOUNT_KEY_NAME = "account.key"
 DEFAULT_ACCOUNT_KEY_SIZE = 4096
 DEFAULT_ACME_DIRECTORY_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 DEFAULT_BAD_NONCE_RETRY = 100
+DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
 DEFAULT_DOMAIN_KEY_NAME = "domain.key"
 DEFAULT_DOMAIN_KEY_SIZE = 4096
 HTTP_HEADER_LOCATION = "Location"
@@ -87,9 +88,24 @@ def generate_rsa_private_key(bits: int) -> bytes:
 
 
 def save_private_file(private_file: Path, contents: bytes):
+    logging.debug(f"Saving private file {private_file} with restrictive permissions")
     with open(private_file, "wb") as out_file:
         # SECURITY: by default, set to most restrictive : the user can change afterwards
         os.chmod(private_file, mode=stat.S_IRUSR | stat.S_IWUSR)
+        out_file.write(contents)
+
+
+def save_public_file(public_file: Path, contents: bytes):
+    logging.debug(f"Saving public file {public_file} with standard permissions")
+    with open(public_file, "wb") as out_file:
+        os.chmod(
+            public_file,
+            mode=stat.S_IRUSR
+            | stat.S_IWUSR
+            | stat.S_IRGRP
+            | stat.S_IWGRP
+            | stat.S_IROTH,
+        )
         out_file.write(contents)
 
 
@@ -202,6 +218,33 @@ def ensure_domain_key_exists(
     domain_key = generate_rsa_private_key(bits)
     save_private_file(domain_key_file, domain_key)
     logging.info(f"Domain key generated into {domain_key_file}")
+
+
+# do not provide IP addresss as domains, they would be marked as domains in SAN !
+def create_domain_signing_request(domain_key_file: Path, domains: list[str]) -> bytes:
+    logging.debug(f"Creating signing request using {domain_key_file} for {domains}")
+    # prepare SAN record like `subjectAltName = DNS:yoursite.com, DNS:www.yoursite.com`
+    domains = [f"DNS:{domain}" for domain in domains]
+    san_alternate_name = "subjectAltName = {}".format(", ".join(domains))
+    # build actual
+    signing_request = run_command(
+        # requires openssl 1.1.1+
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-sha256",
+            "-key",
+            str(domain_key_file),
+            "-subj",
+            "/",
+            "-addext",
+            san_alternate_name,
+        ],
+        err_msg="OpenSSL Error while generating certificate signing request",
+    )
+    logging.debug(f"Signing request created: {signing_request}")
+    return signing_request
 
 
 # ---- ACME -----------------------------------------------------------------
@@ -430,8 +473,13 @@ def cmd_register(args) -> None:
 
 
 def cmd_domains(args) -> None:
+    # generate domain key if required
     domain_key_file = Path(args.domain_key).expanduser()
     ensure_domain_key_exists(domain_key_file, args.bits, args.keep_domain_key)
+    # generate certificate signing request
+    domain_csr_file = Path(args.domain_csr).expanduser()
+    domain_csr = create_domain_signing_request(domain_key_file, args.domain)
+    save_public_file(domain_csr_file, domain_csr)
 
 
 def run(argv) -> None:
@@ -457,6 +505,7 @@ def run(argv) -> None:
     sub.add_argument("--bits", type=int, default=DEFAULT_DOMAIN_KEY_SIZE)
     sub.add_argument("--domain-key", default=DEFAULT_DOMAIN_KEY_NAME)
     sub.add_argument("--keep-domain-key", action="store_true")
+    sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
     sub.add_argument("domain", nargs="+")
 
     args = parser.parse_args(argv)

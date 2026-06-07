@@ -220,3 +220,4 @@ __marimo__/
 # our data
 account.key
 domain.key
+domain.csr
