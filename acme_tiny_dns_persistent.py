@@ -10,7 +10,7 @@ from subprocess import Popen, PIPE
 from sys import exit
 from time import sleep
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.request import HTTPError, Request, urlopen
 import logging, json, os, re, stat, sys
 
 # ---- CONSTANTS -------------------------------------------------------------
@@ -138,8 +138,10 @@ def request_with_json_reply(url: str, data, *, err_msg: str) -> Reply:
             status = response.status
             headers = dict(response.headers)
             data = response.read()  # fully buffer using blocking read
+    except HTTPError as e:
+        raise AppError(f"Request HTTP error ({err_msg}) : {e}, with data {e.fp.read()}")
     except IOError as e:
-        raise AppError(f"ACME request failed ({err_msg}) : {e}")
+        raise AppError(f"Request IO error ({err_msg}) : {e}")
     logging.debug(f"HTTP response: {status=} {headers=} {data=}")
 
     try:
