@@ -11,13 +11,75 @@ from of the [diafygi/acme-tiny](https://github.com/diafygi/acme-tiny)
 
 Install any version of `openssl` (3.0+) executable and make it available in path.
 
-Run the script once to generate a key and get the required information for setup
+### Step 1 (once) : account key, account URL, dns proofs
+
+This operation generates an account key, register an account with it, and gets
+the required information for you to later set-up your persistent DNS proof. This
+is inherently a "centralized operation" as there can be only one proof per
+domain.
+
+Run the script once on your central management station:
 
 ```shell
 python3 acme_tiny_dns_persistent.py register
 ```
 
-Follow the instructions to setup your DNS persistent record required for later
+You will get this kind of output, and the `account_url` is the most important :
+
+```json
+{
+    "account_url": "https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456789",
+    "created_at": "2026-06-06T20:43:08Z",
+    "result": "found",
+    "status": "valid",
+    "instructions": 
+            "Now Create a TXT record named `_validation-persist` at the root of
+            your dns zone. The record value has following structure, adapted for
+            your certificate registry :
+            
+            `CA_DOMAIN; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/ACCOUNTID`
+
+            Example for the domain `example.com`, with LetsEncrypt registry, and
+            a registered account url:
+            
+            `_validation-persist.example.com TXT letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456789`
+             
+            Then you can run the commands of this tool, to get a certificate for your
+            example.com domain, using that ACME-compatible registry account"
+}
+```
+
+Follow the instructions above (and the documentation of your DNS registrar) to
+setup your DNS persistent record required for later, for each DNS zone you need.
+
+### Step 2 (once per server, SECURED) : domain key, domain csr
+
+Running this step on each server allows the domain key itself, to never leave
+the server.
+
+```shell
+python3 acme_tiny_dns_persistent.py domains example.com www.example.com
+```
+
+Which returns with an exit code of `0` on success (and prints some info when log
+level is INFO or below)
+
+By default, the domain key is renewed each time this command is run (for better
+security).
+
+If you want, you can reuse the key by adding the `--keep-domain-key` option to
+the `domains` command.
+
+### Step 3 (once per server, UNPRIVILEGED) : issuing and renewing
+
+First, export the account key to every host requiring it to then request actual
+certificates.
+
+You can use an unpriviledged user account, with the following permissions :
+
+- **domain key** : prevent any access (better security)
+- **domain csr** : read access (used to build requests)
+- **account key** : read access (used to sign requests)
 
 ## Directory URLs
 

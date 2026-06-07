@@ -480,6 +480,9 @@ def cmd_domains(args) -> None:
     domain_csr_file = Path(args.domain_csr).expanduser()
     domain_csr = create_domain_signing_request(domain_key_file, args.domain)
     save_public_file(domain_csr_file, domain_csr)
+    logging.info(
+        f"Certificate signing request {domain_csr_file} generated using {domain_key_file} for domains {args.domain}"
+    )
 
 
 def run(argv) -> None:
