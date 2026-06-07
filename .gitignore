@@ -217,6 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# launcher
+.vscode/personal.json
+
 # our data
 account.key
 domain.key

@@ -32,6 +32,7 @@ ACME_ALG = "RS256"
 ACME_CONTENT_TYPE = "application/jose+json"
 ACME_DIR_NEW_ACCOUNT = "newAccount"
 ACME_DIR_NEW_NONCE = "newNonce"
+ACME_DIR_NEW_ORDER = "newOrder"
 ACME_ERROR_BAD_NONCE = "urn:ietf:params:acme:error:badNonce"
 ACME_KTY = "RSA"
 ACME_REPLAY_NONCE = "Replay-Nonce"
@@ -519,6 +520,54 @@ def acme_ensure_account_is_registered(
     )
 
 
+def acme_create_new_order(
+    new_order_url: str,
+    domains: list[str],
+    *,
+    account_key_file: Path,
+    identification: dict[str, Any],
+    new_nonce_url: str,
+    err_msg: str,
+    retries: int,
+) -> Reply:
+    logging.debug(f"Creating ACME order for {domains=}")
+    payload = [{"type": "dns", "value": domain} for domain in domains]
+    payload = {"identifiers": payload}
+    order = acme_send_signed_request(
+        new_order_url,
+        payload,
+        account_key_file=account_key_file,
+        identification=identification,
+        err_msg=err_msg,
+        new_nonce_url=new_nonce_url,
+        retries=retries,
+    )
+    logging.debug(f"Order created: {order=}")
+    return order
+    # status: 201
+    # data: {
+    #     'status': 'pending',
+    #     'expires': '2026-06-14T15: 55: 35Z',
+    #     'identifiers': [
+    #         {'type': 'dns', 'value': 'example.com'},
+    #         {'type': 'dns', 'value': 'www.example.com'}
+    #     ],
+    #     'authorizations':
+    #     [
+    #         'https://acme-staging-v02.api.letsencrypt.org/acme/authz/123456789/1870853033',
+    #         'https://acme-staging-v02.api.letsencrypt.org/acme/authz/123456789/1870853043'
+    #     ],
+    #     'finalize': 'https://acme-staging-v02.api.letsencrypt.org/acme/finalize/123456789/40530936783'
+    # }
+    #
+    # notable_headers: {
+    #  'Boulder-Requester': '123456789',
+    #  'Link': '<https://acme-staging-v02.api.letsencrypt.org/directory>;rel="index"',
+    #  'Location': 'https://acme-staging-v02.api.letsencrypt.org/acme/order/123456789/40530936783',
+    #  'Replay-Nonce': 'Rj...............................................yI',
+    # }
+
+
 # ---- CLI ------------------------------------------------------------------
 
 
@@ -557,9 +606,24 @@ def cmd_domains(args) -> None:
 
 
 def cmd_certificate(args) -> None:
+    # get domains
     domain_csr_file = Path(args.domain_csr).expanduser()
     domains = get_csr_domains(domain_csr_file)
-    logging.debug(f"Found {domains=} in domain certificate signing request")
+    # lookup urls
+    directory = acme_get_url_directory(
+        args.acme_directory_url, retries=args.bad_nonce_retries
+    )
+    # do the order
+    account_key_file = Path(args.account_key).expanduser()
+    acme_create_new_order(
+        directory[ACME_DIR_NEW_ORDER],
+        domains,
+        account_key_file=account_key_file,
+        retries=args.bad_nonce_retries,
+        new_nonce_url=directory[ACME_DIR_NEW_NONCE],
+        identification=acme_identification_kid(args.account_url),
+        err_msg="Error creating new order",
+    )
 
 
 def run(argv) -> None:
@@ -592,6 +656,7 @@ def run(argv) -> None:
     sub.set_defaults(func=cmd_certificate)
     sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
     sub.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
+    sub.add_argument("--account-url", required=True)
     sub.add_argument("--domain-crt", default=DEFAULT_DOMAIN_CRT_NAME)
 
     args = parser.parse_args(argv)
@@ -617,4 +682,3 @@ def main(argv) -> None:
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-    # main(["--log-level", "debug", "register"])

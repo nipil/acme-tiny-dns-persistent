@@ -39,7 +39,9 @@
             "args": [
                 "--log-level",
                 "debug",
-                "certificate"
+                "certificate",
+                "--account-url",
+                "https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456789"
             ]
         }
     ]
