@@ -97,6 +97,16 @@ def run_command(
     return out
 
 
+def convert_csr_to_der_format(domain_csr: Path) -> bytes:
+    logging.debug(f"Convert domain CSR {domain_csr} to DER format")
+    csr_der = run_command(
+        # requires openssl 0.x
+        ["openssl", "req", "-in", str(domain_csr), "-outform", "DER"]
+    )
+    logging.debug(f"CSR converted to DER format for signing: {csr_der}")
+    return csr_der
+
+
 def generate_rsa_private_key(bits: int) -> bytes:
     logging.debug(f"Generating private key with {bits} bits")
     private_key = run_command(
@@ -698,8 +708,23 @@ def cmd_certificate(args) -> None:
         )
     )
     # TODO: process authorizations ?
-    # TODO: convert CSR to DER format
-    # TODO: finalize
+    # convert CSR to DER format and submit it for signing
+    # FIXME: untested !
+    domain_csr_in_der_format = convert_csr_to_der_format(domain_csr_file)
+    finalize_payload = {
+        "csr": base64_encode_safe_for_url_and_filesystem(domain_csr_in_der_format)
+    }
+    # submit DER formatted CSR for signing by CA
+    # FIXME: untested !
+    result = acme_send_signed_request(
+        order.data[ACME_FINALIZE],
+        finalize_payload,
+        account_key_file=account_key_file,
+        retries=args.bad_nonce_retries,
+        new_nonce_url=directory[ACME_DIR_NEW_NONCE],
+        identification=identification,
+        err_msg="Error finalizing order",
+    )
     #  poll the order to monitor when it's done
     finished_order = acme_poll_until_status_not_in(
         order.headers[HTTP_HEADER_LOCATION],
@@ -712,9 +737,11 @@ def cmd_certificate(args) -> None:
     )
     logging.critical(f"Order complete: {finished_order=}")
     # check for success
+    # FIXME: untested !
     if finished_order.data[ACME_STATUS] != ACME_VALID:
         raise AppError("Order failed: {0}".format(finished_order.data))
     # download the certificate
+    # FIXME: untested !
     certificate = acme_send_signed_request(
         finished_order.data[ACME_CERTIFICATE],
         None,
