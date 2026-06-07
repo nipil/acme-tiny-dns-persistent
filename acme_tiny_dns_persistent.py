@@ -82,6 +82,7 @@ def generate_rsa_private_key(bits):
         ]
     )
 
+
 def save_private_key_file(private_key_file: Path, contents: bytes):
     with open(private_key_file, "wb") as out_file:
         # SECURITY: by default, set to most restrictive : the user can change afterwards
@@ -176,6 +177,28 @@ def sign_with_key_file(data: bytes, key_file: Path) -> bytes:
     )
     logging.debug(f"Signature: {signature_bytes}")
     return signature_bytes
+
+
+def ensure_account_key_exists(account_key_file: Path, bits: int) -> None:
+    if account_key_file.is_file():
+        logging.info(
+            f"Account key {account_key_file} already exists, skipping creation"
+        )
+        return
+    account_key = generate_rsa_private_key(bits)
+    save_private_key_file(account_key_file, account_key)
+    logging.info(f"Account key generated into {account_key_file}")
+
+
+def ensure_domain_key_exists(
+    domain_key_file: Path, bits: int, keep_domain_key: bool
+) -> None:
+    if domain_key_file.is_file() and keep_domain_key:
+        logging.info(f"Domain key {domain_key_file} already exists, skipping creation")
+        return
+    domain_key = generate_rsa_private_key(bits)
+    save_private_key_file(domain_key_file, domain_key)
+    logging.info(f"Domain key generated into {domain_key_file}")
 
 
 # ---- ACME -----------------------------------------------------------------
@@ -317,17 +340,6 @@ def acme_get_account_key_thumbprint(jwk: dict) -> str:
     return base64_encode_safe_for_url_and_filesystem(thumbprint)
 
 
-def acme_ensure_account_key_exists(account_key_file: Path, bits: int) -> None:
-    if account_key_file.is_file():
-        logging.info(
-            f"Account key {account_key_file} already exists, skipping creation"
-        )
-        return
-    account_key = generate_rsa_private_key(bits)
-    save_private_key_file(account_key_file, account_key)
-    logging.info(f"Account key generated into {account_key_file}")
-
-
 def acme_ensure_account_is_registered(
     account_key_file: Path,
     jwk: dict[str, str],
@@ -373,24 +385,13 @@ def acme_ensure_account_is_registered(
     }
 
 
-def acme_ensure_domain_key_exists(
-    domain_key_file: Path, bits: int, keep_domain_key: bool
-) -> None:
-    if domain_key_file.is_file() and keep_domain_key:
-        logging.info(f"Domain key {domain_key_file} already exists, skipping creation")
-        return
-    domain_key = generate_rsa_private_key(bits)
-    save_private_key_file(domain_key_file, domain_key)
-    logging.info(f"Domain key generated into {domain_key_file}")
-
-
 # ---- CLI ------------------------------------------------------------------
 
 
 def cmd_register(args) -> None:
     # do the crypto
     account_key_file = Path(args.account_key).expanduser()
-    acme_ensure_account_key_exists(account_key_file, args.bits)
+    ensure_account_key_exists(account_key_file, args.bits)
     pub_mod, pub_exp = get_public_bytes_from_private_rsa_key(args.account_key)
     jwk = acme_json_web_key_from_public_account_key(pub_mod, pub_exp)
     # do the networking
@@ -427,7 +428,7 @@ def cmd_register(args) -> None:
 
 def cmd_domains(args) -> None:
     domain_key_file = Path(args.domain_key).expanduser()
-    acme_ensure_domain_key_exists(domain_key_file, args.bits, args.keep_domain_key)
+    ensure_domain_key_exists(domain_key_file, args.bits, args.keep_domain_key)
 
 
 def run(argv) -> None:
