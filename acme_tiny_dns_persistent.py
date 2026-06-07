@@ -10,7 +10,7 @@ from sys import exit
 from time import sleep
 from typing import Any, Tuple
 from urllib.request import Request, urlopen
-import logging, json, re, sys
+import logging, json, os, re, stat, sys
 
 # ---- CONSTANTS -------------------------------------------------------------
 
@@ -80,6 +80,8 @@ def generate_rsa_private_key(private_key_file, bits):
         ]
     )
     with open(private_key_file, "wb") as out_file:
+        # SECURITY: by default, set to most restrictive : the user can change afterwards
+        os.chmod(private_key_file, mode=stat.S_IRUSR | stat.S_IWUSR)
         out_file.write(out)
 
 
