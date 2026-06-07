@@ -160,13 +160,14 @@ def get_public_bytes_from_private_rsa_key(key_file: Path) -> Tuple[bytes, bytes]
         err_msg="OpenSSL error while reading account key",
     )
     # extract the desirable parts: the modulus and exponent
-    pub_pattern = re.compile(
-        r"modulus:[\s]*(?:00:)?([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)"
+    pub = re.search(
+        r"modulus:[\s]*(?:00:)?([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)",
+        out.decode(UTF8),
+        re.MULTILINE | re.DOTALL,
     )
-    m = pub_pattern.search(out.decode(UTF8), re.MULTILINE | re.DOTALL)
-    if not m:
+    if not pub:
         raise AppError(f"Could not find public key in account_key {key_file}")
-    pub_mod, pub_exp = m.groups()
+    pub_mod, pub_exp = pub.groups()
     # convert to big-endian bytes
     pub_exp = "{0:x}".format(int(pub_exp))
     pub_exp = "0{0}".format(pub_exp) if len(pub_exp) % 2 else pub_exp
