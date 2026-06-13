@@ -531,26 +531,29 @@ class AcmeClient:
         return False
 
 
-def cmd_authorize(args) -> None:
-    # check inputs
-    if args.persist_until is not None and args.persist_until < int(time()):
-        raise AppError("Persist-until must be an unix timestamp in the future")
-
+def build_client(
+    account_key_file: Path,
+    directory_url: str,
+    retries: int,
+    *,
+    create_account_key_if_missing: bool,
+    allow_account_registration: bool,
+) -> Tuple[AcmeClient, dict[str, str]]:
     # manage account key
-    account_key = OpensslPrivateKey(Path(args.account_key).expanduser())
+    account_key = OpensslPrivateKey(account_key_file.expanduser())
     if not account_key.file.is_file():
+        if not create_account_key_if_missing:
+            raise AppError(
+                f"Account key {account_key_file} missing and creation was not allowed"
+            )
         account_key.new()
         logging.info(f"Generated account key {account_key}")
-    client = AcmeClient(
-        account_key,
-        directory_url=args.directory_url,
-        retries=args.retries,
-    )
 
-    # lookup account by either login or registering (if requested)
+    # lookup account and register if needed
+    client = AcmeClient(account_key, directory_url=directory_url, retries=retries)
     account = client.new_account(
         tos_agreed=True,
-        only_return_existing=not args.account_register,
+        only_return_existing=not allow_account_registration,
     )
     logging.info(
         "Got account {} with status `{}`".format(
@@ -565,13 +568,25 @@ def cmd_authorize(args) -> None:
                 account[ACME_STATUS],
             )
         )
+    return client, account
 
-    # place a new order if none was provided for resuming
-    if args.resume_order_url is None:
-        ord_url, ord_data = client.new_order(args.domain)
-    else:
-        ord_url = args.resume_order_url
-        ord_data = client.post_as_get(ord_url)
+
+def cmd_authorize(args) -> None:
+    # check inputs
+    if args.persist_until is not None and args.persist_until < int(time()):
+        raise AppError("Persist-until must be an unix timestamp in the future")
+
+    # setup account
+    client, account = build_client(
+        Path(args.account_key),
+        args.directory_url,
+        args.retries,
+        create_account_key_if_missing=True,
+        allow_account_registration=True,
+    )
+
+    # place a new order
+    ord_url, ord_data = client.new_order(args.domain)
     logging.info(
         "Got order {} with status `{}`".format(
             ord_url,
@@ -579,13 +594,8 @@ def cmd_authorize(args) -> None:
         )
     )
 
-    # use all order authorizations if none was provided for resuming
-    authz_urls = ord_data[ACME_AUTHORIZATIONS]
-    if args.resume_authz_url is not None:
-        authz_urls = [args.resume_authz_url]
-
     # proces each authorization to display the records to set
-    for auth_url in authz_urls:
+    for auth_url in ord_data[ACME_AUTHORIZATIONS]:
         authz = client.post_as_get(auth_url)
         logging.info(
             "Got authz {} for `{}` with status `{}`".format(
@@ -707,6 +717,17 @@ def cmd_authorize(args) -> None:
         )
 
 
+def cmd_issue(args) -> None:
+    # reuse existing account
+    client, account = build_client(
+        Path(args.account_key),
+        args.directory_url,
+        args.retries,
+        create_account_key_if_missing=False,
+        allow_account_registration=False,
+    )
+
+
 def run(argv) -> None:
     parser = ArgumentParser()
     parser.add_argument(
@@ -714,6 +735,7 @@ def run(argv) -> None:
         choices=["debug", "info", "warning", "error", "critical"],
         default="warning",
     )
+    parser.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
     parser.add_argument("--retries", type=int, default=10)
     parser.add_argument(
         "--directory-url",
@@ -723,13 +745,15 @@ def run(argv) -> None:
 
     sub = parsers.add_parser("authorize")
     sub.set_defaults(func=cmd_authorize)
-    sub.add_argument("--resume-order-url")
-    sub.add_argument("--resume-authz-url")
-    sub.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
-    sub.add_argument("--account-register", action="store_true")
     sub.add_argument("--policy-wildcard", action="store_true")
     sub.add_argument("--persist-until", type=int)
     sub.add_argument("--dns-over-https-json", default=DEFAULT_DNS_OVER_HTTPS_JSON)
+    sub.add_argument("domain", nargs="+")
+
+    sub = parsers.add_parser("issue")
+    sub.set_defaults(func=cmd_issue)
+    sub.add_argument("--domain-key", default=DEFAULT_DOMAIN_KEY_NAME)
+    sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
     sub.add_argument("domain", nargs="+")
 
     args = parser.parse_args(argv)

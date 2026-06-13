@@ -14,16 +14,25 @@
                 "--log-level",
                 "debug",
                 "authorize",
-                // "--account-register",
                 "example.com",
                 "www.example.com",
-                // "--resume-order-url",
-                // "https://acme-staging-v02.api.letsencrypt.org/acme/order/123456789/41077498363",
-                // "--resume-authz-url",
-                // "https://acme-staging-v02.api.letsencrypt.org/acme/authz/123456789/2007080953",
                 "--policy-wildcard",
                 "--persist-until",
                 "2500000000"
+            ]
+        },
+        {
+            "name": "Python Debugger: issue",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--log-level",
+                "debug",
+                "issue",
+                "example.com",
+                "www.example.com",
             ]
         },
     ]
