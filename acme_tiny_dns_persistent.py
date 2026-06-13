@@ -549,7 +549,7 @@ def build_client(
                 f"Account key {account_key_file} missing and creation was not allowed"
             )
         account_key.new()
-        logging.info(f"Generated account key {account_key}")
+        logging.info(f"Generated account key `{account_key.file}`")
 
     # lookup account and register if needed
     client = AcmeClient(account_key, directory_url=directory_url, retries=retries)
@@ -791,6 +791,16 @@ def cmd_issue(args) -> None:
         create_account_key_if_missing=False,
         allow_account_registration=False,
     )
+
+    # ensure a domain_key is available
+    domain_key = OpensslPrivateKey(Path(args.domain_key).expanduser())
+    if not domain_key.file.is_file():
+        domain_key.new()
+        logging.info(f"Generated domain key `{domain_key.file}`")
+
+    # build a CSR from provided domains, directly in DER format
+    # https://datatracker.ietf.org/doc/html/rfc8555#section-7.6
+    # TODO: openssl command
 
     # create a new order from known-to-previously-validating challenges
     ord_url, order = _create_validated_order(
