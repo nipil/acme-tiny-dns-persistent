@@ -4,7 +4,7 @@
 # https://datatracker.ietf.org/doc/html/rfc8555
 # https://datatracker.ietf.org/doc/draft-ietf-acme-dns-persist/
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from base64 import urlsafe_b64encode
 from binascii import unhexlify
 from dataclasses import dataclass, asdict
@@ -13,7 +13,7 @@ from pathlib import Path
 from subprocess import Popen, PIPE
 from sys import exit
 from time import sleep, time
-from typing import Any, Tuple
+from typing import Any, Protocol, Tuple
 from urllib.parse import urlsplit, urlunsplit, urlencode
 from urllib.request import HTTPError, Request, urlopen
 import logging, json, os, re, stat, sys
@@ -571,7 +571,66 @@ def build_client(
     return client, account
 
 
-def cmd_authorize(args) -> None:
+# allows function typing
+class _CheckRecordFn(Protocol):
+    def __call__(
+        self,
+        args: Namespace,
+        account_kid: str,
+        client: AcmeClient,
+        *,
+        authz: dict[str, Any],
+        dns_persist: dict[str, Any],
+    ) -> None: ...
+
+
+def _check_record(
+    args: Namespace,
+    account_kid: str,
+    client: AcmeClient,
+    *,
+    authz: dict[str, Any],
+    dns_persist: dict[str, Any],
+) -> None:
+    # display challenge information as JSON-line
+    record = {
+        ACME_DNS: f"{ACME_VALIDATION_PERSIST}.{authz[ACME_IDENTIFIER][ACME_VALUE]}",
+        ACME_TYPE: ACME_TXT,
+        ACME_VALUE: "{}; accounturi={}{}{}".format(
+            dns_persist[ACME_ISSUER_DOMAIN_NAMES][0],
+            account_kid,
+            "; policy=wildcard" if args.policy_wildcard else "",
+            (
+                ""
+                if args.persist_until is None
+                else f"; persistUntil={args.persist_until}"
+            ),
+        ),
+    }
+    print(json.dumps(record))
+
+    # wait until the desired record has been set
+    logging.info(
+        "Polling for {} record `{}` every {} seconds ...".format(
+            ACME_TXT,
+            record[ACME_DNS],
+            DEFAULT_POLLING_RETRY_SEC,
+        )
+    )
+    while not client._has_dns_persist_txt(
+        authz[ACME_IDENTIFIER][ACME_VALUE],
+        resolver=args.dns_over_https_json,
+    ):
+        sleep(DEFAULT_POLLING_RETRY_SEC)
+    logging.info(
+        "Found {} record `{}` (only presence is verified)".format(
+            ACME_TXT,
+            record[ACME_DNS],
+        )
+    )
+
+
+def cmd_authorize(args: Namespace) -> None:
     # check inputs
     if args.persist_until is not None and args.persist_until < int(time()):
         raise AppError("Persist-until must be an unix timestamp in the future")
@@ -585,6 +644,21 @@ def cmd_authorize(args) -> None:
         allow_account_registration=True,
     )
 
+    # create a new "dummy" order to pre-validate the challenges
+    _create_validated_order(
+        args,
+        account[ACME_KID],
+        client,
+        check_record_hook=_check_record,
+    )
+
+
+def _create_validated_order(
+    args: Namespace,
+    kid: str,
+    client: AcmeClient,
+    check_record_hook: _CheckRecordFn | None,
+) -> Tuple[str, dict[str, Any]]:
     # place a new order
     ord_url, ord_data = client.new_order(args.domain)
     logging.info(
@@ -619,42 +693,15 @@ def cmd_authorize(args) -> None:
                 )
             )
 
-        # display challenge information as JSON-line
-        record = {
-            ACME_DNS: f"{ACME_VALIDATION_PERSIST}.{authz[ACME_IDENTIFIER][ACME_VALUE]}",
-            ACME_TYPE: ACME_TXT,
-            ACME_VALUE: "{}; accounturi={}{}{}".format(
-                dns_persist[0][ACME_ISSUER_DOMAIN_NAMES][0],
-                account[ACME_KID],
-                "; policy=wildcard" if args.policy_wildcard else "",
-                (
-                    ""
-                    if args.persist_until is None
-                    else f"; persistUntil={args.persist_until}"
-                ),
-            ),
-        }
-        print(json.dumps(record))
-
-        # wait until the desired record has been set
-        logging.info(
-            "Polling for {} record `{}` every {} seconds ...".format(
-                ACME_TXT,
-                record[ACME_DNS],
-                DEFAULT_POLLING_RETRY_SEC,
+        # call the check record hook if provided
+        if check_record_hook is not None:
+            check_record_hook(
+                args,
+                kid,
+                client,
+                authz=authz,
+                dns_persist=dns_persist[0],
             )
-        )
-        while not client._has_dns_persist_txt(
-            authz[ACME_IDENTIFIER][ACME_VALUE],
-            resolver=args.dns_over_https_json,
-        ):
-            sleep(DEFAULT_POLLING_RETRY_SEC)
-        logging.info(
-            "Found {} record `{}` (only presence is verified)".format(
-                ACME_TXT,
-                record[ACME_DNS],
-            )
-        )
 
         # trigger the challenge validation
         challenge = client.trigger_challenge(dns_persist[0][ACME_URL])
@@ -716,6 +763,8 @@ def cmd_authorize(args) -> None:
             )
         )
 
+    return ord_url, ord_data
+
 
 def cmd_issue(args) -> None:
     # reuse existing account
@@ -725,6 +774,14 @@ def cmd_issue(args) -> None:
         args.retries,
         create_account_key_if_missing=False,
         allow_account_registration=False,
+    )
+
+    # create a new order from known-to-previously-validating challenges
+    ord_url, order = _create_validated_order(
+        args,
+        account[ACME_KID],
+        client,
+        check_record_hook=None,
     )
 
 
