@@ -467,7 +467,12 @@ class AcmeClient:
             "User-Agent": "acme-tiny-dns-persistent",
         }
         retry = self.retries
+        start = time()
         while True:
+            if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+                raise AppError(f"Request {url} took too long")
+
+            # handle retries
             retry = retry - 1
             if retry < 0:
                 raise AppError(f"ACME request exausted {self.retries} retries")
@@ -617,10 +622,15 @@ def _check_record(
             DEFAULT_POLLING_RETRY_SEC,
         )
     )
+    start = time()
     while not client._has_dns_persist_txt(
         authz[ACME_IDENTIFIER][ACME_VALUE],
         resolver=args.dns_over_https_json,
     ):
+        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            raise AppError(
+                f"Record polling for {authz[ACME_IDENTIFIER][ACME_VALUE]} took too long"
+            )
         sleep(DEFAULT_POLLING_RETRY_SEC)
     logging.info(
         "Found {} record `{}` (only presence is verified)".format(
@@ -713,7 +723,11 @@ def _create_validated_order(
                 challenge[ACME_STATUS],
             )
         )
+
+        start = time()
         while challenge[ACME_STATUS] not in [ACME_VALID, ACME_INVALID]:
+            if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+                raise AppError(f"Challenge {challenge[ACME_URL]} took too long")
             sleep(DEFAULT_POLLING_RETRY_SEC)
             challenge = client.post_as_get(challenge[ACME_URL])
         logging.info(
@@ -745,8 +759,13 @@ def _create_validated_order(
             ord_data[ACME_STATUS],
         )
     )
+    start = time()
     while ord_data[ACME_STATUS] == ACME_PENDING:
+        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            raise AppError(f"Order {ord_url} readiness took too long")
+        sleep(DEFAULT_POLLING_RETRY_SEC)
         ord_data = client.post_as_get(ord_url)
+
     logging.info(
         "Order {} reached status `{}`".format(
             ord_url,
@@ -784,6 +803,12 @@ def cmd_issue(args) -> None:
         check_record_hook=None,
     )
 
+    # work order to completion
+    start = time()
+    while True:
+        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            raise AppError(f"Order {ord_url} completion took too long")
+
 
 def run(argv) -> None:
     parser = ArgumentParser()
@@ -818,6 +843,7 @@ def run(argv) -> None:
         level=getattr(logging, args.log_level.upper()),
         format="%(levelname)s %(message)s",
     )
+    logging.debug(f"Arguments: {args}")
 
     if args.command is None:
         logging.error("No command provided")
