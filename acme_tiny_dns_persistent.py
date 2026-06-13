@@ -75,7 +75,7 @@ class OpensslPrivateKey:
         )
         pub = re.search(
             r"modulus:[\s]*(?:00:)?([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)",
-            out.decode(UTF8),
+            _decode_utf8(out),
             re.MULTILINE | re.DOTALL,
         )
         if not pub:
@@ -263,7 +263,7 @@ class AcmeClient:
         # encode using the URL and filesystem-safe Base64 alphabet
         result = urlsafe_b64encode(data)
         # strip the base64 end-padding characters '='
-        return result.decode(UTF8).replace("=", "")
+        return _decode_utf8(result).replace("=", "")
 
     def _nonce(self) -> str:
         return self._request(self._directory["newNonce"], None).headers["Replay-Nonce"]
@@ -500,10 +500,7 @@ class AcmeClient:
                         e_data[ACME_DETAIL],
                     )
                 )
-            try:
-                data = data.decode(UTF8)
-            except IOError as e:
-                raise AppError(f"ACME response UTF-8 decode failed: {data}")
+            data = _decode_utf8(data)
 
             # ensure the reply JSON parsing will succeed even if empty instead of ignoring errors
             if len(data) == 0:
