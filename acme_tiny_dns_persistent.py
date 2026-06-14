@@ -7,8 +7,7 @@
 from argparse import ArgumentParser, Namespace
 from base64 import urlsafe_b64encode
 from binascii import unhexlify
-from dataclasses import dataclass, asdict
-from hashlib import sha256
+from dataclasses import dataclass
 from pathlib import Path
 from subprocess import Popen, PIPE
 from sys import exit
@@ -16,11 +15,10 @@ from time import sleep, time
 from typing import Any, Protocol, Tuple
 from urllib.parse import urlsplit, urlunsplit, urlencode
 from urllib.request import HTTPError, Request, urlopen
-import logging, json, os, re, stat, sys
+import logging, json, re, sys
 
 DEFAULT_DNS_OVER_HTTPS_JSON = "https://dns.google/resolve"
 DEFAULT_ACCOUNT_KEY_NAME = "account.key"
-DEFAULT_DOMAIN_CRT_NAME = "domain.crt"
 DEFAULT_DOMAIN_KEY_NAME = "domain.key"
 DEFAULT_POLLING_RETRY_SEC = 10
 DEFAULT_POLLING_TIMEOUT_SEC = 3600
@@ -29,6 +27,8 @@ DEFAULT_RATE_LIMITED_RETRY_SEC = 60
 UTF8 = "utf-8"
 HTTP_HEADER_LOCATION = "Location"
 HTTP_HEADER_CONTENT_TYPE = "Content-Type"
+
+ACME_CHALLENGE_NAME = "dns-persist-01"
 
 
 class AppError(Exception):
@@ -206,34 +206,6 @@ def _dns_over_https_json(
     return _json_loads(_decode_utf8(data))
 
 
-ACME_AUTHORIZATIONS = "authorizations"
-ACME_CERTIFICATE = "certificate"
-ACME_CHALLENGES = "challenges"
-ACME_DEACTIVATED = "deactivated"
-ACME_DETAIL = "detail"
-ACME_DNS = "dns"
-ACME_DNS_PERSIST_01 = "dns-persist-01"
-ACME_EXPIRED = "expired"
-ACME_EXPIRES = "expires"
-ACME_FINALIZE = "finalize"
-ACME_IDENTIFIER = "identifier"
-ACME_INVALID = "invalid"
-ACME_ISSUER_DOMAIN_NAMES = "issuer-domain-names"
-ACME_KID = "kid"
-ACME_PENDING = "pending"
-ACME_PROCESSING = "processing"
-ACME_READY = "ready"
-ACME_REVOKED = "revoked"
-ACME_STATUS = "status"
-ACME_TXT = "TXT"
-ACME_TXT_TYPE = 16  # https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2
-ACME_TYPE = "type"
-ACME_URL = "url"
-ACME_VALID = "valid"
-ACME_VALIDATION_PERSIST = "_validation-persist"
-ACME_VALUE = "value"
-
-
 class AcmeClient:
 
     retries: int
@@ -323,7 +295,7 @@ class AcmeClient:
         """
         self._kid = rep.headers[HTTP_HEADER_LOCATION]  # store account for later use
         return {
-            ACME_KID: self._kid,
+            "kid": self._kid,
             "result": "registration" if rep.status == 201 else "login",
             **rep.data,
         }
@@ -460,16 +432,16 @@ class AcmeClient:
             ...
             SOFJ+hLnhzKODueBmIRitiZFlD84ylC2HIqvEiusTjUljnlrrT3+H7bzVA==
             -----END CERTIFICATE-----
-            
+
             -----BEGIN CERTIFICATE-----
             MIIFETCCAvmgAwIBAgIQRWi894FoouBfrwFWfZWO7zANBgkqhkiG9w0BAQsFADBD
             ...
             YJlfyJg=
             -----END CERTIFICATE-----
-            
+
             -----BEGIN CERTIFICATE-----
             MIIGKDCCBBCgAwIBAgIRAKYOL1Z3OCaTuowlAS/mVJgwDQYJKoZIhvcNAQELBQAw
-            
+
             jgKO5JRQNGcnvW8cVYK5AMjgRGZE6V9IxECMeEwNEFA17qGcweG1Tb3IpYs=
             -----END CERTIFICATE-----
 
@@ -491,7 +463,7 @@ class AcmeClient:
         if auth is not None:
             protected_input.update(auth)
         elif self._kid is not None:
-            protected_input.update({ACME_KID: self._kid})
+            protected_input.update({"kid": self._kid})
         else:
             raise AppError("An account ID is required for this operation")
 
@@ -539,19 +511,19 @@ class AcmeClient:
                 e_data = json.load(e.fp)
                 e_hdrs = dict(e.hdrs)
                 logging.debug(f"ACME problem: {e_data=} {e_hdrs=}")
-                if e_data[ACME_TYPE] == "urn:ietf:params:acme:error:badNonce":
+                if e_data["type"] == "urn:ietf:params:acme:error:badNonce":
                     logging.warning(f"ACME request `bad nonce` for {url}, retrying")
                     sleep(1)
                     continue
-                if e_data[ACME_TYPE] == "urn:ietf:params:acme:error:rateLimited":
+                if e_data["type"] == "urn:ietf:params:acme:error:rateLimited":
                     logging.warning(f"ACME request `rate limited` for {url}")
                     sleep(DEFAULT_RATE_LIMITED_RETRY_SEC)
                     continue
                 raise AppError(
                     "ACME error status {} type {} : {}".format(
-                        e_data[ACME_STATUS],
-                        e_data[ACME_TYPE],
-                        e_data[ACME_DETAIL],
+                        e_data["status"],
+                        e_data["type"],
+                        e_data["detail"],
                     )
                 )
 
@@ -571,13 +543,14 @@ class AcmeClient:
 
     @staticmethod
     def _has_dns_persist_txt(domain: str, *, resolver: str) -> bool:
-        domain = f"{ACME_VALIDATION_PERSIST}.{domain}"
-        answers = _dns_over_https_json(resolver, domain, ACME_TXT)
+        domain = f"_validation-persist.{domain}"
+        answers = _dns_over_https_json(resolver, domain, "TXT")
         try:
             answers = answers["Answer"]
         except KeyError:
             return False
-        txt_records = (x for x in answers if x["type"] == ACME_TXT_TYPE)
+        # why 16 ? https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2
+        txt_records = (x for x in answers if x["type"] == 16)
         for txt_record in txt_records:
             # remove the terminating 'root dot' in the dns names for comparison
             if txt_record["name"].rstrip(".") == domain.rstrip("."):
@@ -611,15 +584,15 @@ def build_client(
     )
     logging.info(
         "Got account {} with status `{}`".format(
-            account[ACME_KID],
-            account[ACME_STATUS],
+            account["kid"],
+            account["status"],
         )
     )
-    if account[ACME_STATUS] != ACME_VALID:
+    if account["status"] != "valid":
         raise AppError(
             "Could not use account {} with status `{}`".format(
-                account[ACME_KID],
-                account[ACME_STATUS],
+                account["kid"],
+                account["status"],
             )
         )
     return client, account
@@ -648,10 +621,10 @@ def _check_record(
 ) -> None:
     # display challenge information as JSON-line
     record = {
-        ACME_DNS: f"{ACME_VALIDATION_PERSIST}.{authz[ACME_IDENTIFIER][ACME_VALUE]}",
-        ACME_TYPE: ACME_TXT,
-        ACME_VALUE: "{}; accounturi={}{}{}".format(
-            dns_persist[ACME_ISSUER_DOMAIN_NAMES][0],
+        "dns": f"_validation-persist.{authz['identifier']['value']}",
+        "type": "TXT",
+        "value": "{}; accounturi={}{}{}".format(
+            dns_persist["issuer-domain-names"][0],
             account_kid,
             "; policy=wildcard" if args.policy_wildcard else "",
             (
@@ -666,25 +639,25 @@ def _check_record(
     # wait until the desired record has been set
     logging.info(
         "Polling for {} record `{}` every {} seconds ...".format(
-            ACME_TXT,
-            record[ACME_DNS],
+            "TXT",
+            record["dns"],
             DEFAULT_POLLING_RETRY_SEC,
         )
     )
     start = time()
     while not client._has_dns_persist_txt(
-        authz[ACME_IDENTIFIER][ACME_VALUE],
+        authz["identifier"]["value"],
         resolver=args.dns_over_https_json,
     ):
         if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
             raise AppError(
-                f"Record polling for {authz[ACME_IDENTIFIER][ACME_VALUE]} took too long"
+                f"Record polling for {authz['identifier']['value']} took too long"
             )
         sleep(DEFAULT_POLLING_RETRY_SEC)
     logging.info(
         "Found {} record `{}` (only presence is verified)".format(
-            ACME_TXT,
-            record[ACME_DNS],
+            "TXT",
+            record["dns"],
         )
     )
 
@@ -706,7 +679,7 @@ def cmd_authorize(args: Namespace) -> None:
     # create a new "dummy" order to pre-validate the challenges
     _create_validated_order(
         args,
-        account[ACME_KID],
+        account["kid"],
         client,
         check_record_hook=_check_record,
     )
@@ -723,31 +696,31 @@ def _create_validated_order(
     logging.info(
         "Got order {} with status `{}`".format(
             ord_url,
-            ord_data[ACME_STATUS],
+            ord_data["status"],
         )
     )
 
     # proces each authorization to display the records to set
-    for auth_url in ord_data[ACME_AUTHORIZATIONS]:
+    for auth_url in ord_data["authorizations"]:
         authz = client.post_as_get(auth_url)
         logging.info(
             "Got authz {} for `{}` with status `{}`".format(
                 auth_url,
-                authz[ACME_IDENTIFIER][ACME_VALUE],
-                authz[ACME_STATUS],
+                authz["identifier"]["value"],
+                authz["status"],
             )
         )
 
         # lookup compatible challenge
         dns_persist = [
             challenge
-            for challenge in authz[ACME_CHALLENGES]
-            if challenge[ACME_TYPE] == ACME_DNS_PERSIST_01
+            for challenge in authz["challenges"]
+            if challenge["type"] == ACME_CHALLENGE_NAME
         ]
         if len(dns_persist) == 0:
             raise AppError(
                 "Could not find a `{}` for authz {}".format(
-                    ACME_DNS_PERSIST_01,
+                    ACME_CHALLENGE_NAME,
                     auth_url,
                 )
             )
@@ -763,40 +736,40 @@ def _create_validated_order(
             )
 
         # trigger the challenge validation
-        challenge = client.trigger_challenge(dns_persist[0][ACME_URL])
+        challenge = client.trigger_challenge(dns_persist[0]["url"])
         logging.info(
             "Polling challenge {} for `{}` every {} seconds (current status `{}`)  ...".format(
-                challenge[ACME_URL],
-                authz[ACME_IDENTIFIER][ACME_VALUE],
+                challenge["url"],
+                authz["identifier"]["value"],
                 DEFAULT_POLLING_RETRY_SEC,
-                challenge[ACME_STATUS],
+                challenge["status"],
             )
         )
 
         start = time()
-        while challenge[ACME_STATUS] not in [ACME_VALID, ACME_INVALID]:
+        while challenge["status"] not in ["valid", "invalid"]:
             if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
-                raise AppError(f"Challenge {challenge[ACME_URL]} took too long")
+                raise AppError(f"Challenge {challenge['url']} took too long")
             sleep(DEFAULT_POLLING_RETRY_SEC)
-            challenge = client.post_as_get(challenge[ACME_URL])
+            challenge = client.post_as_get(challenge["url"])
         logging.info(
             "Challenge {} reached status `{}`".format(
-                challenge[ACME_URL],
-                challenge[ACME_STATUS],
+                challenge["url"],
+                challenge["status"],
             )
         )
 
         # check for "failed" authorization state
-        if authz[ACME_STATUS] in [
-            ACME_REVOKED,
-            ACME_DEACTIVATED,
-            ACME_EXPIRED,
-            ACME_INVALID,
+        if authz["status"] in [
+            "revoked",
+            "deactivated",
+            "expired",
+            "invalid",
         ]:
             logging.error(
                 "Authorization {} has failed state `{}`".format(
                     auth_url,
-                    authz[ACME_STATUS],
+                    authz["status"],
                 )
             )
 
@@ -805,11 +778,11 @@ def _create_validated_order(
         "Polling order {} every {} seconds (current status `{}`)  ...".format(
             ord_url,
             DEFAULT_POLLING_RETRY_SEC,
-            ord_data[ACME_STATUS],
+            ord_data["status"],
         )
     )
     start = time()
-    while ord_data[ACME_STATUS] == ACME_PENDING:
+    while ord_data["status"] == "pending":
         if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
             raise AppError(f"Order {ord_url} readiness took too long")
         sleep(DEFAULT_POLLING_RETRY_SEC)
@@ -818,16 +791,16 @@ def _create_validated_order(
     logging.info(
         "Order {} reached status `{}`".format(
             ord_url,
-            ord_data[ACME_STATUS],
+            ord_data["status"],
         )
     )
 
     # check for "failed" order state
-    if ord_data[ACME_STATUS] == ACME_INVALID:
+    if ord_data["status"] == "invalid":
         raise AppError(
             "Order {} has failed state `{}`".format(
                 ord_url,
-                ord_data[ACME_STATUS],
+                ord_data["status"],
             )
         )
 
@@ -860,7 +833,7 @@ def cmd_issue(args) -> None:
     # create a new order from known-to-previously-validating challenges
     ord_url, order = _create_validated_order(
         args,
-        account[ACME_KID],
+        account["kid"],
         client,
         check_record_hook=None,
     )
@@ -873,21 +846,21 @@ def cmd_issue(args) -> None:
 
         order = client.post_as_get(ord_url)
 
-        if order[ACME_STATUS] == ACME_READY:
+        if order["status"] == "ready":
             logging.info(f"Submitting certificate signing request for {args.domain}")
-            order = client.finalize_order(order[ACME_FINALIZE], csr_der)
+            order = client.finalize_order(order["finalize"], csr_der)
 
-        elif order[ACME_STATUS] == ACME_PROCESSING:
+        elif order["status"] == "processing":
             sleep(DEFAULT_POLLING_RETRY_SEC)
 
-        elif order[ACME_STATUS] == ACME_VALID:
+        elif order["status"] == "valid":
             break
 
         else:
-            AppError(f"Order {ord_url} has status `{order[ACME_STATUS]}`")
+            AppError(f"Order {ord_url} has status `{order['status']}`")
 
     logging.info(f"Order is valid, fetching signed certificate for {args.domain}")
-    print(client.certificate_chain(order[ACME_CERTIFICATE]))
+    print(client.certificate_chain(order["certificate"]))
 
 
 def run(argv) -> None:
