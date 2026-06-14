@@ -17,12 +17,9 @@ from urllib.parse import urlsplit, urlunsplit, urlencode
 from urllib.request import HTTPError, Request, urlopen
 import logging, json, re, sys
 
-DEFAULT_DNS_OVER_HTTPS_JSON = "https://dns.google/resolve"
-DEFAULT_ACCOUNT_KEY_NAME = "account.key"
-DEFAULT_DOMAIN_KEY_NAME = "domain.key"
-DEFAULT_POLLING_RETRY_SEC = 10
-DEFAULT_POLLING_TIMEOUT_SEC = 3600
-DEFAULT_RATE_LIMITED_RETRY_SEC = 60
+POLLING_RETRY_SEC = 10
+POLLING_TIMEOUT_SEC = 3600
+RATE_LIMITED_RETRY_SEC = 60
 
 UTF8 = "utf-8"
 HTTP_HEADER_LOCATION = "Location"
@@ -495,7 +492,7 @@ class AcmeClient:
         retry = self.retries
         start = time()
         while True:
-            if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            if time() - start > POLLING_TIMEOUT_SEC:
                 raise AppError(f"Request {url} took too long")
 
             # handle retries
@@ -517,7 +514,7 @@ class AcmeClient:
                     continue
                 if e_data["type"] == "urn:ietf:params:acme:error:rateLimited":
                     logging.warning(f"ACME request `rate limited` for {url}")
-                    sleep(DEFAULT_RATE_LIMITED_RETRY_SEC)
+                    sleep(RATE_LIMITED_RETRY_SEC)
                     continue
                 raise AppError(
                     "ACME error status {} type {} : {}".format(
@@ -641,7 +638,7 @@ def _check_record(
         "Polling for {} record `{}` every {} seconds ...".format(
             "TXT",
             record["dns"],
-            DEFAULT_POLLING_RETRY_SEC,
+            POLLING_RETRY_SEC,
         )
     )
     start = time()
@@ -649,11 +646,11 @@ def _check_record(
         authz["identifier"]["value"],
         resolver=args.dns_over_https_json,
     ):
-        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+        if time() - start > POLLING_TIMEOUT_SEC:
             raise AppError(
                 f"Record polling for {authz['identifier']['value']} took too long"
             )
-        sleep(DEFAULT_POLLING_RETRY_SEC)
+        sleep(POLLING_RETRY_SEC)
     logging.info(
         "Found {} record `{}` (only presence is verified)".format(
             "TXT",
@@ -741,16 +738,16 @@ def _create_validated_order(
             "Polling challenge {} for `{}` every {} seconds (current status `{}`)  ...".format(
                 challenge["url"],
                 authz["identifier"]["value"],
-                DEFAULT_POLLING_RETRY_SEC,
+                POLLING_RETRY_SEC,
                 challenge["status"],
             )
         )
 
         start = time()
         while challenge["status"] not in ["valid", "invalid"]:
-            if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+            if time() - start > POLLING_TIMEOUT_SEC:
                 raise AppError(f"Challenge {challenge['url']} took too long")
-            sleep(DEFAULT_POLLING_RETRY_SEC)
+            sleep(POLLING_RETRY_SEC)
             challenge = client.post_as_get(challenge["url"])
         logging.info(
             "Challenge {} reached status `{}`".format(
@@ -777,15 +774,15 @@ def _create_validated_order(
     logging.info(
         "Polling order {} every {} seconds (current status `{}`)  ...".format(
             ord_url,
-            DEFAULT_POLLING_RETRY_SEC,
+            POLLING_RETRY_SEC,
             ord_data["status"],
         )
     )
     start = time()
     while ord_data["status"] == "pending":
-        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+        if time() - start > POLLING_TIMEOUT_SEC:
             raise AppError(f"Order {ord_url} readiness took too long")
-        sleep(DEFAULT_POLLING_RETRY_SEC)
+        sleep(POLLING_RETRY_SEC)
         ord_data = client.post_as_get(ord_url)
 
     logging.info(
@@ -841,7 +838,7 @@ def cmd_issue(args) -> None:
     # work order to completion
     start = time()
     while True:
-        if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
+        if time() - start > POLLING_TIMEOUT_SEC:
             raise AppError(f"Order {ord_url} completion took too long")
 
         order = client.post_as_get(ord_url)
@@ -851,7 +848,7 @@ def cmd_issue(args) -> None:
             order = client.finalize_order(order["finalize"], csr_der)
 
         elif order["status"] == "processing":
-            sleep(DEFAULT_POLLING_RETRY_SEC)
+            sleep(POLLING_RETRY_SEC)
 
         elif order["status"] == "valid":
             break
@@ -864,13 +861,21 @@ def cmd_issue(args) -> None:
 
 
 def run(argv) -> None:
+    # update the timeouts from arguments without passing them everywhere
+    global POLLING_RETRY_SEC, POLLING_TIMEOUT_SEC, RATE_LIMITED_RETRY_SEC
+
     parser = ArgumentParser()
     parser.add_argument(
         "--log-level",
         choices=["debug", "info", "warning", "error", "critical"],
         default="warning",
     )
-    parser.add_argument("--account-key", default=DEFAULT_ACCOUNT_KEY_NAME)
+    parser.add_argument("--polling-retry-sec", type=int, default=POLLING_RETRY_SEC)
+    parser.add_argument("--polling-timeout-sec", type=int, default=POLLING_TIMEOUT_SEC)
+    parser.add_argument(
+        "--rate-limited-retry-sec", type=int, default=RATE_LIMITED_RETRY_SEC
+    )
+    parser.add_argument("--account-key", default="account.key")
     parser.add_argument("--retries", type=int, default=10)
     parser.add_argument(
         "--directory-url",
@@ -882,12 +887,12 @@ def run(argv) -> None:
     sub.set_defaults(func=cmd_authorize)
     sub.add_argument("--policy-wildcard", action="store_true")
     sub.add_argument("--persist-until", type=int)
-    sub.add_argument("--dns-over-https-json", default=DEFAULT_DNS_OVER_HTTPS_JSON)
+    sub.add_argument("--dns-over-https-json", default="https://dns.google/resolve")
     sub.add_argument("domain", nargs="+")
 
     sub = parsers.add_parser("issue")
     sub.set_defaults(func=cmd_issue)
-    sub.add_argument("--domain-key", default=DEFAULT_DOMAIN_KEY_NAME)
+    sub.add_argument("--domain-key", default="domain.key")
     sub.add_argument("domain", nargs="+")
 
     args = parser.parse_args(argv)
@@ -896,6 +901,10 @@ def run(argv) -> None:
         format="%(levelname)s %(message)s",
     )
     logging.debug(f"Arguments: {args}")
+
+    POLLING_RETRY_SEC = args.polling_retry_sec
+    POLLING_TIMEOUT_SEC = args.polling_timeout_sec
+    RATE_LIMITED_RETRY_SEC = args.rate_limited_retry_sec
 
     if args.command is None:
         logging.error("No command provided")
