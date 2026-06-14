@@ -21,7 +21,6 @@ import logging, json, os, re, stat, sys
 DEFAULT_DNS_OVER_HTTPS_JSON = "https://dns.google/resolve"
 DEFAULT_ACCOUNT_KEY_NAME = "account.key"
 DEFAULT_DOMAIN_CRT_NAME = "domain.crt"
-DEFAULT_DOMAIN_CSR_NAME = "domain.csr"
 DEFAULT_DOMAIN_KEY_NAME = "domain.key"
 DEFAULT_POLLING_RETRY_SEC = 10
 DEFAULT_POLLING_TIMEOUT_SEC = 3600
@@ -29,6 +28,7 @@ DEFAULT_RATE_LIMITED_RETRY_SEC = 60
 
 UTF8 = "utf-8"
 HTTP_HEADER_LOCATION = "Location"
+HTTP_HEADER_CONTENT_TYPE = "Content-Type"
 
 
 class AppError(Exception):
@@ -104,6 +104,27 @@ class OpensslPrivateKey:
             input=data,
         )
 
+    def csr_der(self, domains: list[str]) -> bytes:
+        """https://datatracker.ietf.org/doc/html/rfc8555#section-7.6"""
+        return _openssl(
+            # requires openssl 1.1.1+
+            [
+                "req",
+                "-new",
+                "-sha256",
+                "-key",
+                str(self.file),
+                "-subj",
+                f"/CN={domains[0]}",
+                "-addext",
+                "subjectAltName={}".format(
+                    ",".join([f"DNS:{domain}" for domain in domains])
+                ),
+                "-outform",
+                "DER",
+            ],
+        )
+
 
 def _decode_utf8(data: bytes) -> str:
     try:
@@ -121,7 +142,7 @@ def _json_loads(data: str) -> Any:
 
 @dataclass
 class Reply:
-    data: dict[str, Any]
+    data: Any
     headers: dict[str, str]
     status: int
 
@@ -201,6 +222,7 @@ ACME_ISSUER_DOMAIN_NAMES = "issuer-domain-names"
 ACME_KID = "kid"
 ACME_PENDING = "pending"
 ACME_PROCESSING = "processing"
+ACME_READY = "ready"
 ACME_REVOKED = "revoked"
 ACME_STATUS = "status"
 ACME_TXT = "TXT"
@@ -325,6 +347,16 @@ class AcmeClient:
     def trigger_challenge(self, challenge_url: str) -> dict[str, Any]:
         return self._signed_request(challenge_url, {}, None).data
 
+    def finalize_order(self, order_url: str, csr_der: bytes) -> dict[str, Any]:
+        return self._signed_request(
+            order_url,
+            {"csr": self._base64(csr_der)},
+            None,
+        ).data
+
+    def certificate_chain(self, certificate_url: str) -> str:
+        return self._signed_request(certificate_url, None, None).data
+
     def post_as_get(self, url: str) -> dict[str, Any]:
         rep = self._signed_request(url, None, None)
         """
@@ -348,7 +380,9 @@ class AcmeClient:
                     "value": "example.com"
                 }
             ],
-            "status": "pending"  
+            "status": "valid",
+            # once finalize has been called, processing is done, and state is valid, this appears :
+            "certificate": "https://acme-staging-v02.api.letsencrypt.org/acme/cert/2c4bc8d0c1ddd4e0e1e4963a294f613494c5"
         }
 
         AUTHZ
@@ -419,6 +453,26 @@ class AcmeClient:
             ]
         }
 
+        CERTIFICATE with 'Content-Type': 'application/pem-certificate-chain'
+
+            -----BEGIN CERTIFICATE-----
+            MIIGJzCCBQ+gAwIBAgISLEvI0MHd1ODh5JY6KU9hNJTFMA0GCSqGSIb3DQEBCwUA
+            ...
+            SOFJ+hLnhzKODueBmIRitiZFlD84ylC2HIqvEiusTjUljnlrrT3+H7bzVA==
+            -----END CERTIFICATE-----
+            
+            -----BEGIN CERTIFICATE-----
+            MIIFETCCAvmgAwIBAgIQRWi894FoouBfrwFWfZWO7zANBgkqhkiG9w0BAQsFADBD
+            ...
+            YJlfyJg=
+            -----END CERTIFICATE-----
+            
+            -----BEGIN CERTIFICATE-----
+            MIIGKDCCBBCgAwIBAgIRAKYOL1Z3OCaTuowlAS/mVJgwDQYJKoZIhvcNAQELBQAw
+            
+            jgKO5JRQNGcnvW8cVYK5AMjgRGZE6V9IxECMeEwNEFA17qGcweG1Tb3IpYs=
+            -----END CERTIFICATE-----
+
         """
         return rep.data
 
@@ -463,7 +517,7 @@ class AcmeClient:
 
     def _request(self, url: str, req_data: bytes | None) -> Reply:
         headers = {
-            "Content-Type": "application/jose+json",
+            HTTP_HEADER_CONTENT_TYPE: "application/jose+json",
             "User-Agent": "acme-tiny-dns-persistent",
         }
         retry = self.retries
@@ -500,15 +554,13 @@ class AcmeClient:
                         e_data[ACME_DETAIL],
                     )
                 )
+
+            # every ACME operation returns UTF-8 text
             data = _decode_utf8(data)
 
-            # ensure the reply JSON parsing will succeed even if empty instead of ignoring errors
-            if len(data) == 0:
-                data = "{}"
-            try:
-                data = json.loads(data)
-            except ValueError as e:
-                raise AppError(f"ACME response json parsing failed: {data}")
+            # most ACME operation return JSON
+            if headers.get(HTTP_HEADER_CONTENT_TYPE) == "application/json":
+                data = _json_loads(data)
 
             if status not in [200, 201, 204]:
                 raise AppError(
@@ -783,6 +835,10 @@ def _create_validated_order(
 
 
 def cmd_issue(args) -> None:
+    # check inputs
+    if len(args.domain) == 0:
+        raise AppError("A certificate must have at least one domain")
+
     # reuse existing account
     client, account = build_client(
         Path(args.account_key),
@@ -798,9 +854,8 @@ def cmd_issue(args) -> None:
         domain_key.new()
         logging.info(f"Generated domain key `{domain_key.file}`")
 
-    # build a CSR from provided domains, directly in DER format
-    # https://datatracker.ietf.org/doc/html/rfc8555#section-7.6
-    # TODO: openssl command
+    # build a CSR for the provided domains
+    csr_der = domain_key.csr_der(args.domain)
 
     # create a new order from known-to-previously-validating challenges
     ord_url, order = _create_validated_order(
@@ -815,6 +870,24 @@ def cmd_issue(args) -> None:
     while True:
         if time() - start > DEFAULT_POLLING_TIMEOUT_SEC:
             raise AppError(f"Order {ord_url} completion took too long")
+
+        order = client.post_as_get(ord_url)
+
+        if order[ACME_STATUS] == ACME_READY:
+            logging.info(f"Submitting certificate signing request for {args.domain}")
+            order = client.finalize_order(order[ACME_FINALIZE], csr_der)
+
+        elif order[ACME_STATUS] == ACME_PROCESSING:
+            sleep(DEFAULT_POLLING_RETRY_SEC)
+
+        elif order[ACME_STATUS] == ACME_VALID:
+            break
+
+        else:
+            AppError(f"Order {ord_url} has status `{order[ACME_STATUS]}`")
+
+    logging.info(f"Order is valid, fetching signed certificate for {args.domain}")
+    print(client.certificate_chain(order[ACME_CERTIFICATE]))
 
 
 def run(argv) -> None:
@@ -842,7 +915,6 @@ def run(argv) -> None:
     sub = parsers.add_parser("issue")
     sub.set_defaults(func=cmd_issue)
     sub.add_argument("--domain-key", default=DEFAULT_DOMAIN_KEY_NAME)
-    sub.add_argument("--domain-csr", default=DEFAULT_DOMAIN_CSR_NAME)
     sub.add_argument("domain", nargs="+")
 
     args = parser.parse_args(argv)
