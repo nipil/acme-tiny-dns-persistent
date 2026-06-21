@@ -48,6 +48,7 @@ class OpensslPrivateKey:
         self.file = file
 
     def new(self) -> None:
+        # TODO: switch to elliptic curves crypto: EC / ec_paramgen_curve:P-256
         _openssl(
             [
                 "genpkey",
@@ -61,6 +62,7 @@ class OpensslPrivateKey:
         )
 
     def modulus_exponent(self) -> Tuple[bytes, bytes]:
+        # TODO: how does it work for public key identification parsing ?
         out = _openssl(
             [
                 "pkey",
@@ -260,6 +262,8 @@ class AcmeClient:
         return self._request(self._directory["newNonce"], None).headers["Replay-Nonce"]
 
     def _jwk(self) -> dict[str, str]:
+        # TODO: how does EC work for public key payload ?
+        # i guess x/y instead of e/n, and EC instead of RSA ?
         modulus, exponent = self._account_key.modulus_exponent()
         return {
             "e": self._base64(exponent),
