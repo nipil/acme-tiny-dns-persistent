@@ -635,7 +635,10 @@ def _check_record(
             ),
         ),
     }
-    print(json.dumps(record))
+
+    # flushing is important with json-lines so that consumers can
+    # progress through documents without waiting buffers to be full.
+    print(json.dumps(record), flush=True)
 
     # wait until the desired record has been set
     logging.info(
