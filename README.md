@@ -16,6 +16,14 @@ What is ACME `dns-persist-01` challenge and why is it good ?
 **May 2026** : `dns-persist-01` is still a draft : for more news you can
 follow the [forum thread at LetsEncrypt](https://community.letsencrypt.org/t/dns-persist-01-deployment-status-and-timeline/246468/)
 
+## Additional tools
+
+You can [acme-tiny-dns-persistent-ovh](https://github.com/nipil/acme-tiny-dns-persistent-ovh.git)
+to combine this tool's `authorize` command with on-demand DNS record configuration for OVH registrar.
+
+You can implement this kind of adapter for other DNS providers, of course.
+And if you do, please tell me so i list them here !
+
 ## Credits, goals and non-goals
 
 All ACME key management and API for registration is straight from of the
