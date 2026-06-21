@@ -121,6 +121,12 @@ poll the DNS to check these are *present* before continuing :
 {"dns": "_validation-persist.www.example.com", "type": "TXT", "value": "letsencrypt.org; accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456789"}
 ```
 
+If you use the `--policy-wildcard` option and/or the `--persist-until` option, you will see these additional fields :
+
+```json
+{"dns": "_validation-persist.example.com", "type": "TXT", "value": "...; policy=wildcard; persistUntil=2500000000"}
+```
+
 Follow the documentation of your DNS registrar to setup the shown DNS records
 required for later verification, for each DNS record you want certificate for.
 
