@@ -105,6 +105,8 @@ class OpensslPrivateKey:
 
     def csr_der(self, domains: list[str]) -> bytes:
         """https://datatracker.ietf.org/doc/html/rfc8555#section-7.6"""
+        # TODO: remove domain from CN, as it is NOT RECOMMENDED
+        # https://github.com/cabforum/servercert/blob/main/docs/BR.md#71272-domain-validated
         return _openssl(
             # requires openssl 1.1.1+
             [
