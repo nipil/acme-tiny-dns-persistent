@@ -7,13 +7,13 @@ This tool only requires :
 - the standard python 3.10+ library (no pip, nothing)
 - the openssl 3.0+ command-line tool (available in path)
 
-What is ACME `dns-persistent-01` challenge and why is it good ?
+What is ACME `dns-persist-01` challenge and why is it good ?
 
 - it could work with DNS registrars who do not provide API
 - each host can obtain and renew cert using the account key **only**
 - no hosts need access to the DNS provider API (for security and simplicity)
 
-**May 2026** : `dns-persistent-01` is still a draft : for more news you can
+**May 2026** : `dns-persist-01` is still a draft : for more news you can
 follow the [forum thread at LetsEncrypt](https://community.letsencrypt.org/t/dns-persist-01-deployment-status-and-timeline/246468/)
 
 ## Credits, goals and non-goals
